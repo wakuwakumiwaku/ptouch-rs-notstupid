@@ -60,6 +60,30 @@ align = "center"
 rotation = 0.0
 
 [[labels]]
+title = "Wi-Fi: Office Guest"
+copies = 1
+
+[labels.document]
+version = 1
+tape_width_mm = 12
+dpi = 180
+font_name = "Inter"
+font_margin = 0
+flip_h = false
+flip_v = false
+
+[[labels.document.elements]]
+type = "text"
+content = "WIFI: Office-Guest\nPass: welcome2026"
+align = "center"
+rotation = 0.0
+
+[[labels.document.elements]]
+type = "qr_code"
+content = "WIFI:S:Office-Guest;T:WPA;P:welcome2026;;"
+rotation = 0.0
+
+[[labels]]
 title = "é è ê ç ñ ¿ ¡ ™ ® ©"
 copies = 1
 

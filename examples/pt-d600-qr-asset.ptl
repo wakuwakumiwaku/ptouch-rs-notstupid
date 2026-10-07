@@ -1,0 +1,18 @@
+version = 1
+tape_width_mm = 24
+dpi = 180
+font_name = "DINish"
+font_margin = 0
+flip_h = false
+flip_v = false
+
+[[elements]]
+type = "text"
+content = "SERVER RACK A-01\n10.0.4.15"
+align = "center"
+rotation = 0.0
+
+[[elements]]
+type = "qr_code"
+content = "https://infra.internal/rack/A-01"
+rotation = 0.0

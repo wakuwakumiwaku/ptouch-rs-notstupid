@@ -58,12 +58,39 @@ impl PtouchApp {
         let mut app = Self::new(cc);
         if let Some(ref path_str) = layout_path {
             let path = std::path::Path::new(path_str);
-            if let Ok(text) = std::fs::read_to_string(path)
-                && let Ok(doc) = ptouch_render::document::LabelDocument::from_toml_str(&text)
-            {
-                panels::toolbar::apply_layout(&mut app.state, doc);
-                app.state.show_setup_modal = false;
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(batch) = ptouch_render::document::LabelBatch::from_toml_str(&text) {
+                    panels::batch_panel::apply_loaded_batch(&mut app.state, batch);
+                    app.state.show_setup_modal = false;
+                } else if let Ok(doc) = ptouch_render::document::LabelDocument::from_toml_str(&text)
+                {
+                    panels::toolbar::apply_layout(&mut app.state, doc);
+                    app.state.show_setup_modal = false;
+                }
             }
+        }
+        if std::env::var("PTOUCH_VIEW").as_deref() == Ok("batch") {
+            app.state.view_mode = crate::state::ViewMode::Batch;
+            app.state.show_setup_modal = false;
+        } else if std::env::var("PTOUCH_VIEW").as_deref() == Ok("generator") {
+            app.state.show_generator_modal = true;
+            app.state.show_setup_modal = false;
+        } else if std::env::var("PTOUCH_VIEW").as_deref() == Ok("setup") {
+            app.state.show_setup_modal = true;
+        } else if std::env::var("PTOUCH_NO_MODAL").is_ok() {
+            app.state.show_setup_modal = false;
+        }
+        if let Ok(val) = std::env::var("PTOUCH_BATCH_INDEX")
+            && let Ok(idx) = val.parse::<usize>()
+            && idx < app.state.batch_items.len()
+        {
+            app.state.switch_active_batch(idx);
+        }
+        if let Ok(val) = std::env::var("PTOUCH_SELECT_ELEMENT")
+            && let Ok(idx) = val.parse::<usize>()
+            && idx < app.state.elements.len()
+        {
+            app.state.selected_element = Some(idx);
         }
         app
     }

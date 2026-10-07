@@ -741,49 +741,54 @@ pub fn do_open_batch(state: &mut AppState) {
 
     match ptouch_render::document::LabelBatch::from_toml_str(&text) {
         Ok(batch) => {
-            state.batch_items.clear();
-            for (idx, entry) in batch.labels.into_iter().enumerate() {
-                let id = state.next_batch_item_id;
-                state.next_batch_item_id += 1;
-                let title = if entry.title.is_empty() {
-                    format!("Label {}", idx + 1)
-                } else {
-                    entry.title
-                };
-                state.batch_items.push(crate::state::BatchItem {
-                    id,
-                    title,
-                    copies: entry.copies,
-                    document: entry.document,
-                    preview_bitmap: None,
-                    preview_texture: None,
-                    dirty: true,
-                });
-            }
-            state.active_batch_index = 0;
-            if !state.batch_items.is_empty() {
-                let doc = state.batch_items[0].document.clone();
-                if !state.printer_target.is_bluetooth() {
-                    state.tape_width_mm = doc.tape_width_mm;
-                    state.update_tape_pixels();
-                }
-                state.font_name = doc.font_name;
-                state.font_margin = doc.font_margin;
-                state.overall_flip_h = doc.flip_h;
-                state.overall_flip_v = doc.flip_v;
-                state.elements = doc.elements;
-                state.selected_element = if state.elements.is_empty() {
-                    None
-                } else {
-                    Some(0)
-                };
-                state.mark_dirty();
-            }
+            apply_loaded_batch(state, batch);
             state.status_message =
                 format!("Opened batch with {} label(s)", state.batch_items.len());
         }
         Err(e) => {
             state.status_message = format!("Parse batch error: {e}");
         }
+    }
+}
+
+pub(crate) fn apply_loaded_batch(state: &mut AppState, batch: ptouch_render::document::LabelBatch) {
+    state.batch_items.clear();
+    for (idx, entry) in batch.labels.into_iter().enumerate() {
+        let id = state.next_batch_item_id;
+        state.next_batch_item_id += 1;
+        let title = if entry.title.is_empty() {
+            format!("Label {}", idx + 1)
+        } else {
+            entry.title
+        };
+        state.batch_items.push(crate::state::BatchItem {
+            id,
+            title,
+            copies: entry.copies,
+            document: entry.document,
+            preview_bitmap: None,
+            preview_texture: None,
+            dirty: true,
+        });
+    }
+    state.active_batch_index = 0;
+    if !state.batch_items.is_empty() {
+        let doc = state.batch_items[0].document.clone();
+        if !state.printer_target.is_bluetooth() {
+            state.tape_width_mm = doc.tape_width_mm;
+            state.update_tape_pixels();
+        }
+        state.font_name = doc.font_name;
+        state.font_margin = doc.font_margin;
+        state.overall_flip_h = doc.flip_h;
+        state.overall_flip_v = doc.flip_v;
+        state.margin_mm = doc.margin_mm;
+        state.elements = doc.elements;
+        state.selected_element = if state.elements.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        state.mark_dirty();
     }
 }

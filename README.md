@@ -14,14 +14,48 @@ in [ptouch-rs-notstupid](https://github.com/wakuwakumiwaku/ptouch-rs-notstupid) 
 ![ptouch-gui preview](docs/images/ptouch-gui-preview.png)
 
 <p align="center">
-  <em>ptouch-gui preview: clean white canvas, outlined label tape, symmetrical centered margins, and precise millimeter cut indicators</em>
+  <em>ptouch-gui preview: clean white canvas, outlined label tape, native QR code support, symmetrical centered margins, and precise millimeter cut indicators</em>
 </p>
 
+### 📸 Visual Feature Showcase
+
+<details open>
+<summary><strong>📋 Multi-Label Batch Overview ("View All Labels & Print All")</strong> (click to collapse)</summary>
+<br>
+
+![ptouch-gui batch overview](docs/images/ptouch-gui-batch-overview.png)
+
+*Full batch queue management: live tape previews, in-place text & QR editing, per-label copy counters (NUMBER TO PRINT), cut-between-labels toggle, and zero-waste continuous chain statistics.*
+
+</details>
+
+<details open>
+<summary><strong>📱 Native QR Code Controls & Presets</strong> (click to collapse)</summary>
+<br>
+
+![ptouch-gui qr controls](docs/images/ptouch-gui-qr-controls.png)
+
+*Pure-Rust 1-bit QR code engine with integer module scaling (zero blur on thermal heads), 1-click presets (Wi-Fi, URLs, Asset Tags), auto tape height fit, and 0°–270° rotation.*
+
+</details>
+
 <details>
-<summary><strong>📸 First-Run Setup & Cartridge Tracking Modal</strong> (click to expand)</summary>
+<summary><strong>⚡ Quick Batch Generator Modal</strong> (click to expand)</summary>
+<br>
+
+![ptouch-gui batch generator](docs/images/ptouch-gui-batch-generator.png)
+
+*Instantly generate batch label sequences (Server-01 .. Server-24 with zero padding) or multi-line text lists in one click.*
+
+</details>
+
+<details>
+<summary><strong>⚙️ Tape Setup & Cartridge Tracking Modal</strong> (click to expand)</summary>
 <br>
 
 ![ptouch-gui startup modal](docs/images/ptouch-gui-setup-modal.png)
+
+*First-run cartridge detector and optional tape length tracker (8m standard / 4m sample).*
 
 </details>
 

@@ -506,6 +506,7 @@ fn do_open_layout(state: &mut AppState) {
 }
 
 pub(crate) fn apply_layout(state: &mut AppState, document: LabelDocument) {
+    let doc_clone = document.clone();
     if !state.printer_target.is_bluetooth() {
         state.tape_width_mm = document.tape_width_mm;
         state.update_tape_pixels();
@@ -514,12 +515,39 @@ pub(crate) fn apply_layout(state: &mut AppState, document: LabelDocument) {
     state.font_margin = document.font_margin;
     state.overall_flip_h = document.flip_h;
     state.overall_flip_v = document.flip_v;
+    state.margin_mm = document.margin_mm;
     state.elements = document.elements;
     state.selected_element = if state.elements.is_empty() {
         None
     } else {
         Some(0)
     };
+    if state.batch_items.is_empty() {
+        let title = state
+            .elements
+            .first()
+            .map(|e| e.display_name())
+            .unwrap_or_else(|| "Label 1".into());
+        state.batch_items.push(crate::state::BatchItem {
+            id: state.next_batch_item_id,
+            title,
+            copies: 1,
+            document: doc_clone,
+            preview_bitmap: None,
+            preview_texture: None,
+            dirty: true,
+        });
+        state.next_batch_item_id += 1;
+        state.active_batch_index = 0;
+    } else if state.active_batch_index < state.batch_items.len() {
+        state.batch_items[state.active_batch_index].document = doc_clone;
+        state.batch_items[state.active_batch_index].title = state
+            .elements
+            .first()
+            .map(|e| e.display_name())
+            .unwrap_or_else(|| "Label".into());
+        state.batch_items[state.active_batch_index].dirty = true;
+    }
     state.mark_dirty();
 }
 
