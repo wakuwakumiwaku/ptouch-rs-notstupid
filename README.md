@@ -27,13 +27,17 @@ in [ptouch-rs-notstupid](https://github.com/wakuwakumiwaku/ptouch-rs-notstupid) 
 
 ## Features
 
-- **Multi-Label Batch Projects**: Manage multiple labels in a single project with live visual tape previews and an explicit **NUMBER TO PRINT** copy counter directly beside each label.
-- **Continuous Zero-Waste Batch Printing**: Print an entire queue of different labels in one continuous chain session (`chain = true`), cutting tape waste between labels down to 0 mm.
+- **Native QR Code Generation**: Pure-Rust 1-bit QR code engine with crisp integer module scaling ($M \ge 1$ px/module) and quiet zones for razor-sharp thermal printhead edges. Reliably readable by smartphones and 2D barcode scanners with zero subpixel fuzziness. Features inline quick editing, 0°–270° rotation, height presets, and 1-click formats (URLs, Wi-Fi `WIFI:S:...`, and Asset Tags).
+- **Multi-Label Batch Projects**: Manage multiple labels in a single project with live visual tape previews, in-place card editing, and an explicit **NUMBER TO PRINT** copy counter directly beside each label.
+- **Continuous Zero-Waste Batch Printing**: Print an entire queue of different labels in one continuous chain session (`chain = true`), cutting tape waste between labels down to 0 mm. Includes per-label auto-cut toggles in the batch overview.
+- **Smart Automatic Pre-Trimming & Mixed Batches**: Automatically detects when label content extends into the prehead blank area and enables pre-trimming without manual configuration. Mixed batches seamlessly combine standard zero-waste chain labels and pre-trimmed labels in a single job.
+- **Fast Batch Navigation & Editing**: Jump between labels in the designer canvas using `←` / `→` keyboard arrow shortcuts. Double-click any label on the canvas or batch overview card to immediately focus the text editor.
+- **Hardware Connection Safety & Emergency Cancellation**: The canvas and controls are safely locked and dimmed out until a physical printer is connected and powered on. Includes live status monitoring and an immediate **Cancel Print** button to abort jobs cleanly.
 - **Quick Batch Generation**: Instant creation of series tags (sequential numbering `Server-01` to `Server-24` with zero-padding) or line-by-line text lists.
 - **Bundled Professional Typography**: Embedded **Inter** (modern ultra-legible default), **DIN 1451 / DINish** (German industrial engineering standard), and **Frutiger** (maximum distance recognition).
 - Print text labels with custom font, size, alignment and rotation
 - Print images (PNG, JPEG, GIF, BMP, TIFF, WebP, SVG, and more)
-- Compose multi-element labels (text + image + cut mark + padding)
+- Compose multi-element labels (text + QR code + image + cut mark + padding)
 - Save and reload designs as self-contained `.ptl` (single label) or `.ptb` (multi-label batch) layout files with embedded images
 - Template layouts with `{{name}}` placeholders and batch-print from a CSV
 - Chain print and multi-copy support
@@ -154,12 +158,19 @@ Each release publishes ready-to-use downloads on the
 ptouch-gui
 ```
 
-- Live label preview with zoom
-- Add/edit/reorder text, images, cut marks, padding
-- Free-angle text rotation with auto font sizing
+- Live label preview with zoom, millimeter rulers, tape outline, and cut indicators
+- Native QR Code generator with 1-click presets (URL, Wi-Fi, Asset Tag) and integer-module thermal scaling
+- Add/edit/reorder text, QR codes, images, cut marks, padding
+- Fast batch navigation via `←` / `→` arrow keys on canvas
+- Double-click canvas or batch cards to edit text immediately
+- Automatic pre-trimming detection & mixed regular/pretrimmed batch printing
+- Batch Overview with live multi-label cards, in-place editing, and per-label auto-cut toggles
+- Category 3 hardware safety protection: canvas and controls blackout when disconnected
+- Real-time printer status monitoring and emergency print cancellation (`Cancel Print`)
+- Free-angle text and QR rotation with auto font sizing
 - Mirror the whole label or a single element (horizontal/vertical)
-- Tape width selection
-- Save/Open layout (`.ptl`) with images embedded for portability
+- Tape width selection and startup cartridge tracking modal
+- Save/Open layout (`.ptl`) or multi-label batch project (`.ptb`) with embedded assets
 - Print to connected printer or export to image file
 - Feed and cut tape without printing
 
@@ -175,6 +186,12 @@ ptouch print "Line 1" "Line 2"
 # Print with options
 ptouch print "Label" -f "DejaVu Sans" -s 32 -a center
 
+# Print QR code (URL or text)
+ptouch print -q "https://github.com/wakuwakumiwaku/ptouch-rs-notstupid"
+
+# Combined text + QR code
+ptouch print "Server Rack" -q "https://inventory.local/rack-01"
+
 # Print image (PNG, JPEG, BMP, SVG, etc.)
 ptouch print -i logo.png
 
@@ -187,6 +204,7 @@ ptouch print "MIRROR" --flip-h
 # Export to image file (no printer needed, format from extension)
 ptouch print "Preview" -o label.png -w 76
 ptouch print "Preview" -o label.bmp -w 76
+ptouch print -q "https://example.com" -o qr-label.png -w 76
 
 # Print a layout designed in the GUI (images are embedded in the file)
 ptouch print --layout label.ptl
@@ -234,6 +252,7 @@ cat people.csv | ptouch print --layout badge.ptl --csv - --set dept=Eng
 | | `--list-vars` | List the placeholders a layout declares, then exit |
 | | `--allow-missing` | Render placeholders with no value as blank |
 | `-i` | `--image` | Image file path |
+| `-q` | `--qr` | Print a QR code (URL or text) |
 | `-o` | `--output` | Export to image file instead of printing |
 | `-f` | `--font` | Font name (default: Inter, bundled: Inter, DINish/DIN 1451, Frutiger) |
 | `-s` | `--size` | Font size in points (auto if omitted) |

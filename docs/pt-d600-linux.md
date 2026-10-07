@@ -101,10 +101,18 @@ preview, then click **Print**. These CLI commands actually consume tape:
 ```sh
 ./target/release/ptouch print "USB-C cables"
 ./target/release/ptouch print --layout examples/pt-d600-12mm.ptl
+
+# Print a standalone QR code
+./target/release/ptouch print -q "https://github.com/wakuwakumiwaku/ptouch-rs-notstupid"
+
+# Print combined text and QR code
+./target/release/ptouch print "Rack A1" -q "https://inventory.local/rack-a1"
 ```
 
 Use the example's print command only with a matching 12 mm cartridge. If a job
 fails, inspect the printer and label before retrying; a partially printed job
+can jam the cutter mechanism.
+
 ### Disconnects or `usblp` driver conflicts
 
 If the printer appears briefly in `dmesg` and immediately disconnects, the kernel's legacy `usblp` (USB line printer) module is claiming the device and resetting the USB controller. Blacklist it so userspace `libusb` can communicate without interference:
@@ -160,7 +168,7 @@ forward, the printer cannot mechanically reverse tape.
 When a cut is performed, the 25 mm of tape between the printhead and the cutter has
 already moved past the printhead.
 
-This project provides three ways to handle this in `ptouch-gui` and `ptouch-cli`:
+This project provides multiple ways to handle this in `ptouch-gui` and `ptouch-cli`:
 
 1. **Auto Cut (Default)**:
    - Prints the label and cuts once at the end.
@@ -175,6 +183,9 @@ This project provides three ways to handle this in `ptouch-gui` and `ptouch-cli`
 4. **Trim Leader (Pre-cut)**:
    - Enable "Trim leader scrap (pre-cut)" in GUI (or `--precut` in CLI).
    - The printer will snip off the 25 mm leader before printing for symmetrical margins.
+5. **Smart Automatic Pre-Trimming & Mixed Batches**:
+   - In `ptouch-gui`, if label elements extend into the left prehead margin zone, the editor automatically detects and enables pre-trimming.
+   - Batch queues seamlessly support mixed batches containing both standard zero-waste chain labels and pre-trimmed labels.
 
 ## Reliability changes in this fork
 
@@ -183,6 +194,10 @@ This project provides three ways to handle this in `ptouch-gui` and `ptouch-cli`
 - Refuse another job on a failed USB session until it is explicitly
   reinitialized. The existing best-effort behavior for a printer that sends
   no completion reply is retained; silence is not proof that a label printed.
+- Category 3 hardware safety protection: canvas and controls are safely locked and dimmed out until the printer is connected and powered on.
+- Emergency print cancellation button (`Cancel Print`) and live worker status indicators.
+- Synchronized multi-label batch cutting to prevent buffer desync and cutter stalling.
+- Pure-Rust 1-bit integer module QR code generation with quiet zones, scannable with zero thermal printhead subpixel blur.
 - Support JPEG export, PNG fallback for unknown extensions, and finish image
   encoding before opening the destination so an encoder error does not
   truncate an existing file. This is not an atomic-write or disk-full guarantee.
