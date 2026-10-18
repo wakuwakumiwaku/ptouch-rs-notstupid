@@ -186,6 +186,287 @@ impl TextRenderer {
 
         Ok(bitmap)
     }
+
+    /// Render text using the largest possible font size whose actual glyph ink
+    /// bounding box fits within `(max_width_px, print_width - 2 * font_margin)`.
+    ///
+    /// When `allow_wrap` is true and a single-line input contains spaces, this
+    /// also evaluates balanced 2-line and 3-line word-wrapped splits and picks
+    /// whichever layout yields the largest character size (`font_size`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_text_fit_box(
+        &mut self,
+        lines: &[&str],
+        print_width: u32,
+        max_width_px: Option<u32>,
+        font_name: &str,
+        font_margin: u32,
+        align: TextAlign,
+        allow_wrap: bool,
+    ) -> Result<LabelBitmap> {
+        if print_width == 0 {
+            return Err(RenderError::Text("print_width must be > 0".into()));
+        }
+
+        let text = lines.join("\n");
+        if text.trim().is_empty() {
+            return self.render_text(lines, print_width, font_name, None, font_margin, align);
+        }
+
+        let eff_margin = font_margin.max(2).min(print_width / 4);
+        let avail_h = print_width.saturating_sub(eff_margin * 2).max(1);
+        let avail_w = max_width_px.unwrap_or(16384).max(1);
+
+        let mut candidates = vec![text.clone()];
+        if allow_wrap && lines.len() == 1 && max_width_px.is_some() {
+            let single = lines[0].trim();
+            if single.contains(' ') {
+                let two_line = split_balanced_n_lines(single, 2);
+                if two_line != text {
+                    candidates.push(two_line);
+                }
+                if single.matches(' ').count() >= 2 && avail_h >= 36 {
+                    let three_line = split_balanced_n_lines(single, 3);
+                    if !candidates.contains(&three_line) {
+                        candidates.push(three_line);
+                    }
+                }
+            }
+        }
+
+        let mut best_candidate = text;
+        let mut best_font_size = 2.0_f32;
+
+        for (idx, cand) in candidates.into_iter().enumerate() {
+            let num_lines = cand.lines().count().max(1);
+            let line_factor = if num_lines > 1 { 1.05 } else { 1.15 };
+
+            let mut low = 2.0_f32;
+            let mut high = (avail_h as f32) * 1.8;
+            let mut cand_best = low;
+
+            for _ in 0..13 {
+                let mid = (low + high) * 0.5;
+                if let Some((min_x, max_x, min_y, max_y)) =
+                    self.measure_ink_bbox(&cand, mid, line_factor, font_name, align)
+                {
+                    let ink_w = (max_x - min_x).max(1) as u32;
+                    let ink_h = (max_y - min_y).max(1) as u32;
+                    if ink_w <= avail_w && ink_h <= avail_h {
+                        cand_best = mid;
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
+                } else {
+                    high = mid;
+                }
+            }
+
+            if idx == 0 {
+                best_font_size = cand_best;
+                best_candidate = cand;
+            } else if cand_best > best_font_size * 1.12 {
+                // Only prefer wrapped multi-line layout if it yields noticeably larger letters.
+                best_font_size = cand_best;
+                best_candidate = cand;
+            }
+        }
+
+        let num_lines = best_candidate.lines().count().max(1);
+        let line_factor = if num_lines > 1 { 1.05 } else { 1.15 };
+        self.render_tight_at_size(
+            &best_candidate,
+            best_font_size,
+            line_factor,
+            print_width,
+            font_name,
+            align,
+        )
+    }
+
+    /// Measure the exact pixel bounding box `(min_x, max_x, min_y, max_y)` of all
+    /// glyph pixels with `alpha >= 128` for `text` at `font_size`.
+    fn measure_ink_bbox(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        line_factor: f32,
+        font_name: &str,
+        align: TextAlign,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let line_height = (font_size * line_factor).ceil().max(1.0);
+        let metrics = Metrics::new(font_size.max(1.0), line_height);
+
+        let resolved = crate::font::find_font(font_name);
+        let effective_name = resolved.as_deref().unwrap_or(font_name);
+        let family = if effective_name.is_empty() {
+            Family::SansSerif
+        } else {
+            Family::Name(effective_name)
+        };
+        let attrs = Attrs::new().family(family);
+        let cosmic_align = Some(align.to_cosmic());
+
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(Some(16384.0), None);
+        buffer.set_text(text, &attrs, Shaping::Advanced, cosmic_align);
+        buffer.shape_until_scroll(&mut self.font_system, true);
+
+        let mut min_x = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut min_y = i32::MAX;
+        let mut max_y = i32::MIN;
+
+        let text_color = Color::rgb(0, 0, 0);
+        buffer.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            text_color,
+            |x, y, w, h, color| {
+                if color.a() >= 128 && w > 0 && h > 0 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x + w as i32);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y + h as i32);
+                }
+            },
+        );
+
+        if min_x <= max_x && min_y <= max_y {
+            Some((min_x, max_x, min_y, max_y))
+        } else {
+            None
+        }
+    }
+
+    /// Render `text` at `font_size` with tight horizontal bounds and vertically centered ink.
+    fn render_tight_at_size(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        line_factor: f32,
+        print_width: u32,
+        font_name: &str,
+        align: TextAlign,
+    ) -> Result<LabelBitmap> {
+        let line_height = (font_size * line_factor).ceil().max(1.0);
+        let metrics = Metrics::new(font_size.max(1.0), line_height);
+
+        let resolved = crate::font::find_font(font_name);
+        let effective_name = resolved.as_deref().unwrap_or(font_name);
+        let family = if effective_name.is_empty() {
+            Family::SansSerif
+        } else {
+            Family::Name(effective_name)
+        };
+        let attrs = Attrs::new().family(family);
+        let cosmic_align = Some(align.to_cosmic());
+
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(Some(16384.0), None);
+        buffer.set_text(text, &attrs, Shaping::Advanced, cosmic_align);
+        buffer.shape_until_scroll(&mut self.font_system, true);
+
+        let mut min_x = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut min_y = i32::MAX;
+        let mut max_y = i32::MIN;
+
+        let text_color = Color::rgb(0, 0, 0);
+        buffer.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            text_color,
+            |x, y, w, h, color| {
+                if color.a() >= 128 && w > 0 && h > 0 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x + w as i32);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y + h as i32);
+                }
+            },
+        );
+
+        if min_x > max_x || min_y > max_y {
+            return Ok(LabelBitmap::new(1, print_width));
+        }
+
+        let ink_w = ((max_x - min_x).max(1)) as u32;
+        let ink_h = ((max_y - min_y).max(1)) as u32;
+        let x_offset = min_x;
+        let y_offset = ((print_width as i32 - ink_h as i32) / 2) - min_y;
+
+        let mut bitmap = LabelBitmap::new(ink_w, print_width);
+        buffer.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            text_color,
+            |x, y, w, h, color| {
+                if color.a() < 128 {
+                    return;
+                }
+                let px = x - x_offset;
+                let py = y + y_offset;
+                for dy in 0..h as i32 {
+                    for dx in 0..w as i32 {
+                        let fx = px + dx;
+                        let fy = py + dy;
+                        if fx >= 0 && fy >= 0 {
+                            bitmap.set_pixel(fx as u32, fy as u32, true);
+                        }
+                    }
+                }
+            },
+        );
+
+        Ok(bitmap)
+    }
+}
+
+/// Split a single-line string into `n` balanced lines at word boundaries.
+fn split_balanced_n_lines(s: &str, n: usize) -> String {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.len() < n || n <= 1 {
+        return s.to_string();
+    }
+    let total_len: usize = words.iter().map(|w| w.len()).sum::<usize>() + words.len() - 1;
+    let mut lines = Vec::with_capacity(n);
+    let mut start_idx = 0;
+
+    for line_idx in 0..(n - 1) {
+        let remaining_lines = n - line_idx;
+        let remaining_words = &words[start_idx..];
+        let rem_len: usize = remaining_words.iter().map(|w| w.len()).sum::<usize>()
+            + remaining_words.len().saturating_sub(1);
+        let target_len = rem_len / remaining_lines;
+
+        let mut best_end = start_idx + 1;
+        let mut best_diff = usize::MAX;
+        let mut acc_len = 0;
+        let max_end = words.len() - (remaining_lines - 1);
+
+        for end in (start_idx + 1)..=max_end {
+            let w_len = words[end - 1].len();
+            acc_len += if end == start_idx + 1 {
+                w_len
+            } else {
+                1 + w_len
+            };
+            let diff = acc_len.abs_diff(target_len);
+            if diff <= best_diff {
+                best_diff = diff;
+                best_end = end;
+            } else {
+                break;
+            }
+        }
+        lines.push(words[start_idx..best_end].join(" "));
+        start_idx = best_end;
+    }
+    let _ = total_len;
+    lines.push(words[start_idx..].join(" "));
+    lines.join("\n")
 }
 
 #[cfg(test)]

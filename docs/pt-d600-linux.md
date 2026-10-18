@@ -186,6 +186,10 @@ This project provides multiple ways to handle this in `ptouch-gui` and `ptouch-c
 5. **Smart Automatic Pre-Trimming & Mixed Batches**:
    - In `ptouch-gui`, if label elements extend into the left prehead margin zone, the editor automatically detects and enables pre-trimming.
    - Batch queues seamlessly support mixed batches containing both standard zero-waste chain labels and pre-trimmed labels.
+6. **Label Length Confinement & "Fit Largest Possible Font"**:
+   - Set a maximum finished label length (e.g. `100 mm`) in `ptouch-gui` (`Auto | 50mm | 75mm | 100mm | 150mm` or custom `mm`) or via `-L` / `--max-length 100` in `ptouch-cli`.
+   - With **"🔠 Fit largest possible font in confined area"** enabled (default), the renderer measures actual glyph ink pixels and binary-searches the largest font size (including balanced 2-line and 3-line word wrapping for long single-line strings) that fills the confined box.
+   - Automatically switches to a compact `3.0 mm` pre-trim margin when maximizing font inside a confined area so `94 mm` of a `100 mm` label is available for content instead of losing `54 mm` to `27 mm` leader margins. Shorter labels keep their natural length without blank padding.
 
 ## Reliability changes in this fork
 

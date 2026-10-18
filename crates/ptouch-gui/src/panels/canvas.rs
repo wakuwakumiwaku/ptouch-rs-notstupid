@@ -29,7 +29,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
     }
 
     // Multi-label batch navigation bar
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new("📋 Project Batch:")
                 .strong()
@@ -116,7 +116,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(4.0);
 
     // Quick text editor and zoom controls
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new("✏ Text:")
                 .strong()
@@ -164,7 +164,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             {
                 let resp = ui.add(
                     egui::TextEdit::singleline(content)
-                        .desired_width(260.0)
+                        .desired_width(240.0)
                         .hint_text("Type URL or QR content..."),
                 );
                 if state.request_text_focus {
@@ -195,7 +195,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             {
                 let resp = ui.add(
                     egui::TextEdit::singleline(content)
-                        .desired_width(260.0)
+                        .desired_width(240.0)
                         .hint_text("Type label text here..."),
                 );
                 if state.request_text_focus {
@@ -264,31 +264,38 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             state.zoom_fit = false;
         }
         ui.label(format!("Zoom: {:.0}%", state.zoom * 100.0));
+    });
 
-        ui.separator();
+    ui.add_space(2.0);
 
-        // Quick Margin & Auto Pre-trim selector
+    // Quick Margin & Label Length Confinement row
+    ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new("📏 Margin:")
                 .strong()
-                .color(egui::Color32::from_rgb(30, 41, 59)),
+                .color(egui::Color32::from_rgb(147, 197, 253)),
         );
 
-        let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
-        let cur_margin = state.margin_mm.unwrap_or(27.0);
+        let is_pretrim = state.is_pretrim();
+        let cur_margin = state.effective_margin_mm();
 
-        let is_centered = state.margin_mm.is_none() || state.margin_mm == Some(27.0);
+        let is_centered =
+            !is_pretrim && (state.margin_mm.is_none() || state.margin_mm == Some(27.0));
         if ui
             .selectable_label(is_centered, "Centered (~27mm)")
             .clicked()
         {
-            state.margin_mm = None;
+            state.margin_mm = if state.max_length_mm.is_some() {
+                Some(27.0)
+            } else {
+                None
+            };
             state.cut_mode = CutMarginMode::CenteredFull;
             state.sync_active_to_batch();
             state.mark_dirty();
         }
 
-        let is_3mm = state.margin_mm == Some(3.0);
+        let is_3mm = (cur_margin - 3.0).abs() < 0.1;
         if ui.selectable_label(is_3mm, "✂ 3mm").clicked() {
             state.margin_mm = Some(3.0);
             state.cut_mode = CutMarginMode::PretrimCut;
@@ -297,7 +304,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             state.mark_dirty();
         }
 
-        let is_5mm = state.margin_mm == Some(5.0);
+        let is_5mm = (cur_margin - 5.0).abs() < 0.1;
         if ui.selectable_label(is_5mm, "✂ 5mm").clicked() {
             state.margin_mm = Some(5.0);
             state.cut_mode = CutMarginMode::PretrimCut;
@@ -315,7 +322,11 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
         );
         if drag_resp.changed() {
             if (custom_val - 27.0).abs() < 0.1 {
-                state.margin_mm = None;
+                state.margin_mm = if state.max_length_mm.is_some() {
+                    Some(27.0)
+                } else {
+                    None
+                };
                 state.cut_mode = CutMarginMode::CenteredFull;
             } else {
                 state.margin_mm = Some(custom_val);
@@ -330,45 +341,82 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             state.mark_dirty();
         }
 
-        if is_pretrim {
-            ui.label(
-                egui::RichText::new(format!(
-                    "✂ Auto Pre-trim ({:.1} mm • 24.5 mm scrap)",
-                    cur_margin
-                ))
-                .small()
+        ui.separator();
+
+        // Quick Label Length Confinement selector
+        ui.label(
+            egui::RichText::new("📐 Max Length:")
                 .strong()
-                .color(egui::Color32::from_rgb(194, 65, 12)),
-            )
+                .color(egui::Color32::from_rgb(147, 197, 253)),
+        );
+
+        let is_auto_len = state.max_length_mm.is_none();
+        if ui
+            .selectable_label(is_auto_len, "Auto")
+            .on_hover_text("Unconstrained label length (grows with text)")
+            .clicked()
+        {
+            state.set_max_length_mm(None);
+        }
+
+        for &preset_mm in &[50.0_f32, 75.0, 100.0, 150.0] {
+            let is_preset = state
+                .max_length_mm
+                .map(|m| (m - preset_mm).abs() < 0.1)
+                .unwrap_or(false);
+            if ui
+                .selectable_label(is_preset, format!("{:.0}mm", preset_mm))
+                .on_hover_text(format!(
+                    "Confine total label length to ≤ {:.0} mm",
+                    preset_mm
+                ))
+                .clicked()
+            {
+                state.set_max_length_mm(Some(preset_mm));
+            }
+        }
+
+        if let Some(cur_max) = state.max_length_mm {
+            let mut max_val = cur_max;
+            let len_resp = ui
+                .add(
+                    egui::DragValue::new(&mut max_val)
+                        .range(10.0..=1000.0)
+                        .speed(1.0)
+                        .prefix("≤ ")
+                        .suffix(" mm"),
+                )
+                .on_hover_text(
+                    "Maximum total finished label length in mm.\n\
+                     Text font size automatically adjusts so the label fits.",
+                );
+            if len_resp.changed() {
+                state.set_max_length_mm(Some(max_val));
+            }
+        }
+
+        let mut fit_largest = state.fit_largest_font;
+        if ui
+            .checkbox(&mut fit_largest, "🔠 Fit largest font in confined area")
             .on_hover_text(
-                "Margin is < 24.5 mm (tighter than printer head distance).\n\
-                 The printer will automatically pre-trim the 24.5 mm scrap snippet\n\
-                 so your label has tight, professional margins.",
-            );
-        } else {
-            ui.label(
-                egui::RichText::new(format!("📏 Full Lead ({:.1} mm • 0 mm scrap)", cur_margin))
-                    .small()
-                    .strong()
-                    .color(egui::Color32::from_rgb(22, 101, 52)),
+                "Automatically scales text to the largest possible font size (using tight\n\
+                 pixel ink bounds and balanced multi-line wrapping) inside the confined area.",
             )
-            .on_hover_text(
-                "Margin is ≥ 24.5 mm.\n\
-                 Leading margin uses the printer's natural 24.5 mm hardware lead.\n\
-                 Zero scrap snippets produced!",
-            );
+            .changed()
+        {
+            state.set_fit_largest_font(fit_largest);
         }
     });
 
     ui.add_space(4.0);
 
     // Tape overview header
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if let Some(ref texture) = state.preview_texture {
             let content_mm = (texture.size_vec2().x / px_per_mm) * copies as f32;
             let lead_mm: f32 = 24.5;
-            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
-            let margin_mm = state.margin_mm.unwrap_or(27.0);
+            let is_pretrim = state.is_pretrim();
+            let margin_mm = state.effective_margin_mm();
 
             if state.cut_mode == CutMarginMode::ChainPrint {
                 ui.label(
@@ -409,13 +457,25 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         .color(egui::Color32::from_rgb(40, 100, 200)),
                 );
             }
+
+            if let Some(max_len) = state.max_length_mm {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "📐 Confined: ≤ {:.1} mm (Auto-fit font)",
+                        max_len
+                    ))
+                    .strong()
+                    .color(egui::Color32::from_rgb(96, 165, 250)),
+                );
+            }
         }
     });
 
     ui.separator();
 
     // Canvas area background: crisp white as requested
-    let canvas_rect = ui.available_rect_before_wrap();
+    let canvas_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
     let canvas_size = canvas_rect.size();
 
     // Fill canvas background with white
@@ -458,8 +518,8 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             let tape_physical_h_px = (state.tape_width_mm as f32 * px_per_mm).max(content_h_px);
 
             let lead_mm: f32 = 24.5;
-            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
-            let margin_mm = state.margin_mm.unwrap_or(27.0);
+            let is_pretrim = state.is_pretrim();
+            let margin_mm = state.effective_margin_mm();
             let margin_px = (margin_mm * px_per_mm).round();
             let lead_w_px = (lead_mm * px_per_mm).round();
 

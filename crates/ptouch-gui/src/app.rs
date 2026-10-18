@@ -21,6 +21,8 @@ pub struct PtouchApp {
     renderer: TextRenderer,
     /// Receiver for responses from the printer worker thread.
     resp_rx: mpsc::Receiver<PrinterEvent>,
+    /// Frame counter for optional automated screenshot capture (`PTOUCH_SCREENSHOT`).
+    screenshot_frame: u32,
 }
 
 impl PtouchApp {
@@ -50,6 +52,7 @@ impl PtouchApp {
             },
             renderer: TextRenderer::new(),
             resp_rx,
+            screenshot_frame: 0,
         }
     }
 
@@ -92,6 +95,12 @@ impl PtouchApp {
         {
             app.state.selected_element = Some(idx);
         }
+        if let Ok(val) = std::env::var("PTOUCH_MAX_LENGTH")
+            && let Ok(max_len) = val.parse::<f32>()
+        {
+            app.state.ensure_batch_initialized();
+            app.state.set_max_length_mm(Some(max_len));
+        }
         app
     }
 
@@ -105,11 +114,14 @@ impl PtouchApp {
             return;
         }
 
-        let result = match ptouch_render::document::render_elements(
+        let max_width_px = self.state.max_content_width_px();
+        let result = match ptouch_render::document::render_elements_with_options(
             &self.state.elements,
             self.state.tape_width_px,
             &self.state.font_name,
             self.state.font_margin,
+            max_width_px,
+            self.state.fit_largest_font,
             &mut self.renderer,
         ) {
             Ok(result) => result,
@@ -293,6 +305,30 @@ impl eframe::App for PtouchApp {
             self.update_preview(&ctx);
         }
 
+        if let Ok(shot_path) = std::env::var("PTOUCH_SCREENSHOT") {
+            self.screenshot_frame += 1;
+            ctx.request_repaint();
+            if self.screenshot_frame == 4 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            }
+            let screenshot_img = ctx.input(|i| {
+                for event in &i.raw.events {
+                    if let egui::Event::Screenshot { image, .. } = event {
+                        return Some(image.clone());
+                    }
+                }
+                None
+            });
+            if let Some(color_img) = screenshot_img {
+                let w = color_img.width() as u32;
+                let h = color_img.height() as u32;
+                if let Some(rgba) = image::RgbaImage::from_raw(w, h, color_img.as_raw().to_vec()) {
+                    let _ = rgba.save(&shot_path);
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+
         // Periodic repaint so we pick up worker responses even when idle
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
@@ -340,6 +376,7 @@ mod tests {
                 state,
                 renderer: TextRenderer::new(),
                 resp_rx: rx,
+                screenshot_frame: 0,
             },
             tx,
         )

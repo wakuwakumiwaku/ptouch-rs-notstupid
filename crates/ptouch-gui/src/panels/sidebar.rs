@@ -119,16 +119,104 @@ fn show_tape_section(ui: &mut egui::Ui, state: &mut AppState) {
     });
 }
 
-/// Print options: cut & margin mode, copies, and quality selection.
+/// Print options: label length confinement, cut & margin mode, copies, and quality selection.
 fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("Margin & Trimming");
+    ui.heading("Length & Margin");
     ui.add_space(4.0);
+
+    // Label length confinement (works on both USB and Bluetooth)
+    let mut limit_len = state.max_length_mm.is_some();
+    if ui
+        .checkbox(&mut limit_len, "Confine label length (auto-fit)")
+        .on_hover_text(
+            "When enabled, confines total finished label length to the target size in mm.\n\
+             If the text is too long, its font size is automatically adjusted so it fits.\n\
+             Shorter labels keep their natural length.",
+        )
+        .changed()
+    {
+        if limit_len {
+            state.set_max_length_mm(Some(100.0));
+        } else {
+            state.set_max_length_mm(None);
+        }
+    }
+
+    let mut fit_largest = state.fit_largest_font;
+    if ui
+        .checkbox(
+            &mut fit_largest,
+            "🔠 Fit largest possible font in confined area",
+        )
+        .on_hover_text(
+            "When enabled, automatically scales text up or down to the largest possible\n\
+             font size (using tight pixel ink bounds and balanced multi-line wrapping)\n\
+             that fits inside the confined label area.",
+        )
+        .changed()
+    {
+        state.set_fit_largest_font(fit_largest);
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Length:");
+        let is_auto = state.max_length_mm.is_none();
+        if ui.selectable_label(is_auto, "Auto").clicked() {
+            state.set_max_length_mm(None);
+        }
+        for &preset_mm in &[50.0_f32, 75.0, 100.0, 150.0] {
+            let selected = state
+                .max_length_mm
+                .map(|m| (m - preset_mm).abs() < 0.1)
+                .unwrap_or(false);
+            if ui
+                .selectable_label(selected, format!("{:.0}mm", preset_mm))
+                .clicked()
+            {
+                state.set_max_length_mm(Some(preset_mm));
+            }
+        }
+    });
+
+    if let Some(cur_max) = state.max_length_mm {
+        let mut edit_max = cur_max;
+        ui.horizontal(|ui| {
+            ui.label("Max Length:");
+            if ui
+                .add(
+                    egui::DragValue::new(&mut edit_max)
+                        .range(10.0..=1000.0)
+                        .speed(1.0)
+                        .suffix(" mm"),
+                )
+                .changed()
+            {
+                state.set_max_length_mm(Some(edit_max));
+            }
+        });
+        let mode_desc = if state.fit_largest_font {
+            "largest possible font fitted"
+        } else {
+            "text auto-shrinks to fit"
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "📐 Confined to ≤ {:.1} mm ({})",
+                state.max_length_mm.unwrap_or(cur_max),
+                mode_desc
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(96, 165, 250)),
+        );
+    }
+
+    ui.add_space(6.0);
     ui.add_enabled_ui(!state.printer_target.is_bluetooth(), |ui| {
         let is_chain = state.cut_mode == CutMarginMode::ChainPrint;
 
         ui.horizontal(|ui| {
             if ui.selectable_label(!is_chain, "Standard / Auto Pre-trim").clicked() {
-                state.cut_mode = if state.margin_mm.map(|m| m < 24.5).unwrap_or(false) {
+                state.cut_mode = if state.is_pretrim() {
                     CutMarginMode::PretrimCut
                 } else {
                     CutMarginMode::CenteredFull
@@ -145,19 +233,23 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
 
         if state.cut_mode != CutMarginMode::ChainPrint {
             ui.add_space(4.0);
-            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
-            let cur_margin = state.margin_mm.unwrap_or(27.0);
+            let is_pretrim = state.is_pretrim();
+            let cur_margin = state.effective_margin_mm();
 
             ui.horizontal(|ui| {
                 ui.label("Presets:");
-                let is_cent = state.margin_mm.is_none() || state.margin_mm == Some(27.0);
+                let is_cent = !is_pretrim && (state.margin_mm.is_none() || state.margin_mm == Some(27.0));
                 if ui.selectable_label(is_cent, "Centered (~27mm)").clicked() {
-                    state.margin_mm = None;
+                    state.margin_mm = if state.max_length_mm.is_some() {
+                        Some(27.0)
+                    } else {
+                        None
+                    };
                     state.cut_mode = CutMarginMode::CenteredFull;
                     state.sync_active_to_batch();
                     state.mark_dirty();
                 }
-                let is_3 = state.margin_mm == Some(3.0);
+                let is_3 = (cur_margin - 3.0).abs() < 0.1;
                 if ui.selectable_label(is_3, "✂ 3mm").clicked() {
                     state.margin_mm = Some(3.0);
                     state.cut_mode = CutMarginMode::PretrimCut;
@@ -165,7 +257,7 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
                     state.sync_active_to_batch();
                     state.mark_dirty();
                 }
-                let is_5 = state.margin_mm == Some(5.0);
+                let is_5 = (cur_margin - 5.0).abs() < 0.1;
                 if ui.selectable_label(is_5, "✂ 5mm").clicked() {
                     state.margin_mm = Some(5.0);
                     state.cut_mode = CutMarginMode::PretrimCut;

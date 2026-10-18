@@ -146,6 +146,10 @@ struct PrintArgs {
     #[arg(long)]
     flip_v: bool,
 
+    /// Confine total finished label length to at most MM millimeters (auto-resizes text font to fit)
+    #[arg(short = 'L', long, value_name = "MM")]
+    max_length: Option<f32>,
+
     /// Skip final feed and cut (for chained labels)
     #[arg(long)]
     chain: bool,
@@ -388,7 +392,18 @@ fn main() {
 /// Ad-hoc content flags overridden when `--layout` is set. Keep in sync with
 /// `PrintArgs`; the `content_flag_ids_resolve` test guards against renames.
 const CONTENT_FLAG_IDS: &[&str] = &[
-    "text", "image", "qr", "font", "size", "align", "margin", "cut", "pad", "flip_h", "flip_v",
+    "text",
+    "image",
+    "qr",
+    "font",
+    "size",
+    "align",
+    "margin",
+    "cut",
+    "pad",
+    "flip_h",
+    "flip_v",
+    "max_length",
 ];
 
 /// Return the display names of content flags the user explicitly passed on the
@@ -690,7 +705,8 @@ fn execute_print(args: &PrintArgs, ignored: &[String]) -> Result<(), Box<dyn std
         };
 
     // Whole-label mirroring applies once, after the label is composed.
-    let bitmap = build_label(args, print_width)?.mirrored(args.flip_h, args.flip_v);
+    let dpi = device.as_ref().map_or(180, |d| d.dpi());
+    let bitmap = build_label(args, print_width, dpi)?.mirrored(args.flip_h, args.flip_v);
     emit_label(&bitmap, args, max_px, device.as_mut())?;
 
     if let Some(dev) = device {
@@ -841,11 +857,14 @@ fn render_layout(
     print_width: u32,
 ) -> Result<LabelBitmap, Box<dyn std::error::Error>> {
     let mut renderer = TextRenderer::new();
-    let bitmap = document::render_elements(
+    let max_width_px = doc.max_content_width_px(doc.dpi);
+    let bitmap = document::render_elements_with_options(
         &doc.elements,
         print_width,
         &doc.font_name,
         doc.font_margin,
+        max_width_px,
+        doc.fit_largest_font,
         &mut renderer,
     )?
     .ok_or_else(|| PtouchError::SendFailed("layout produced no output".to_string()))?;
@@ -934,35 +953,10 @@ fn emit_label(
 fn build_label(
     args: &PrintArgs,
     print_width: u32,
+    dpi: u16,
 ) -> Result<LabelBitmap, Box<dyn std::error::Error>> {
-    let mut result: Option<LabelBitmap> = None;
-
-    // Render text if provided
-    if !args.text.is_empty() {
-        let mut renderer = TextRenderer::new();
-        let lines: Vec<&str> = args.text.iter().map(|s| s.as_str()).collect();
-        let align = args.align.to_text_align();
-
-        debug!(
-            "Rendering {} text line(s), font={}, size={:?}, margin={}, align={:?}",
-            lines.len(),
-            args.font,
-            args.size,
-            args.margin,
-            args.align
-        );
-
-        let text_bitmap = renderer.render_text(
-            &lines,
-            print_width,
-            &args.font,
-            args.size,
-            args.margin,
-            align,
-        )?;
-
-        result = Some(append_bitmap(result, text_bitmap));
-    }
+    // Load non-text elements first so we know how much width remains if --max-length is set.
+    let mut suffix_bitmap: Option<LabelBitmap> = None;
 
     // Load and append image if provided
     if let Some(ref img_path) = args.image {
@@ -973,28 +967,131 @@ fn build_label(
             ..image_loader::ImageLoadOptions::default()
         };
         let img_bitmap = image_loader::load_image(Path::new(img_path), &options)?;
-        result = Some(append_bitmap(result, img_bitmap));
+        suffix_bitmap = Some(append_bitmap(suffix_bitmap, img_bitmap));
     }
 
     // Generate and append QR code if provided
     if let Some(ref qr_content) = args.qr {
         debug!("Generating QR code: {}", qr_content);
         let qr_bitmap = ptouch_render::qr::render_qr_code(qr_content, print_width)?;
-        result = Some(append_bitmap(result, qr_bitmap));
+        suffix_bitmap = Some(append_bitmap(suffix_bitmap, qr_bitmap));
     }
 
     // Add cut mark if requested
     if args.cut {
         debug!("Adding cut mark");
         let mark = make_cutmark(print_width);
-        result = Some(append_bitmap(result, mark));
+        suffix_bitmap = Some(append_bitmap(suffix_bitmap, mark));
     }
 
     // Add padding if requested
     if let Some(pad_px) = args.pad {
         debug!("Adding {} px padding", pad_px);
         let pad = make_padding(print_width, pad_px);
-        result = Some(append_bitmap(result, pad));
+        suffix_bitmap = Some(append_bitmap(suffix_bitmap, pad));
+    }
+
+    let suffix_width_px = suffix_bitmap.as_ref().map_or(0, |b| b.width());
+    let base_margin_mm = if args.chain {
+        2.0
+    } else if args.precut || args.max_length.is_some() {
+        3.0
+    } else {
+        27.0
+    };
+    let max_content_px =
+        LabelDocument::max_content_width_px_with_margin(args.max_length, base_margin_mm, dpi);
+
+    let mut result: Option<LabelBitmap> = None;
+
+    // Render text if provided
+    if !args.text.is_empty() {
+        let mut renderer = TextRenderer::new();
+        let lines: Vec<&str> = args.text.iter().map(|s| s.as_str()).collect();
+        let align = args.align.to_text_align();
+
+        debug!(
+            "Rendering {} text line(s), font={}, size={:?}, margin={}, align={:?}, max_length={:?}",
+            lines.len(),
+            args.font,
+            args.size,
+            args.margin,
+            args.align,
+            args.max_length
+        );
+
+        let text_bitmap = if let Some(max_total_w) = max_content_px {
+            let max_text_w = max_total_w.saturating_sub(suffix_width_px).max(1);
+            if args.size.is_none() {
+                renderer.render_text_fit_box(
+                    &lines,
+                    print_width,
+                    Some(max_text_w),
+                    &args.font,
+                    args.margin,
+                    align,
+                    true,
+                )?
+            } else {
+                let mut bmp = renderer.render_text(
+                    &lines,
+                    print_width,
+                    &args.font,
+                    args.size,
+                    args.margin,
+                    align,
+                )?;
+                if bmp.width() > max_text_w {
+                    let base_pt = args.size.unwrap_or(24.0);
+                    let mut low = 0.01f32;
+                    let mut high = 1.0f32;
+                    for _ in 0..12 {
+                        let mid = (low + high) * 0.5;
+                        let pt = (base_pt * mid).max(1.0);
+                        let candidate = renderer.render_text(
+                            &lines,
+                            print_width,
+                            &args.font,
+                            Some(pt),
+                            args.margin,
+                            align,
+                        )?;
+                        if candidate.width() <= max_text_w {
+                            bmp = candidate;
+                            low = mid;
+                        } else {
+                            high = mid;
+                        }
+                    }
+                    if bmp.width() > max_text_w {
+                        bmp = renderer.render_text(
+                            &lines,
+                            print_width,
+                            &args.font,
+                            Some((base_pt * low).max(1.0)),
+                            args.margin,
+                            align,
+                        )?;
+                    }
+                }
+                bmp
+            }
+        } else {
+            renderer.render_text(
+                &lines,
+                print_width,
+                &args.font,
+                args.size,
+                args.margin,
+                align,
+            )?
+        };
+
+        result = Some(append_bitmap(result, text_bitmap));
+    }
+
+    if let Some(suffix) = suffix_bitmap {
+        result = Some(append_bitmap(result, suffix));
     }
 
     result.ok_or_else(|| {

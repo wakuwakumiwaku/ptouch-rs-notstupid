@@ -59,6 +59,16 @@ pub struct LabelDocument {
     /// - If `< 24.5 mm`: Compact margin (e.g. 3.0mm); automatically triggers pre-trimming the leader scrap.
     #[serde(default)]
     pub margin_mm: Option<f32>,
+    /// Optional maximum total finished label length in millimeters (including left & right margins).
+    /// When set, if the composed label would exceed this length, text elements are automatically
+    /// resized to a smaller font size so the finished label fits within `max_length_mm`.
+    /// Shorter labels keep their natural length without extra padding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length_mm: Option<f32>,
+    /// When true, text elements are rendered at the largest possible font size whose
+    /// actual glyph ink bounding box fits within the confined label area.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fit_largest_font: bool,
     /// Elements in composition order (left to right).
     pub elements: Vec<LabelElement>,
 }
@@ -66,15 +76,62 @@ pub struct LabelDocument {
 impl LabelDocument {
     /// Returns true if this label requires pre-trimming the 24.5mm hardware leader scrap.
     pub fn is_pretrim(&self) -> bool {
-        match self.margin_mm {
-            Some(m) => m < 24.5,
-            None => false,
+        if self.margin_mm.is_none() && self.max_length_mm.is_none() {
+            return false;
         }
+        self.effective_margin_mm() < 24.5
     }
 
     /// Effective margin in millimeters.
+    /// If `max_length_mm` is set and either `fit_largest_font` is enabled (with no explicit
+    /// margin) or the default (~27mm) margin would leave insufficient space (< 10mm) for content,
+    /// automatically falls back to a compact 3.0mm pre-trim margin.
     pub fn effective_margin_mm(&self) -> f32 {
-        self.margin_mm.unwrap_or(27.0)
+        let base =
+            if self.margin_mm.is_none() && self.max_length_mm.is_some() && self.fit_largest_font {
+                3.0
+            } else {
+                self.margin_mm.unwrap_or(27.0)
+            };
+        if let Some(max_len) = self.max_length_mm
+            && base * 2.0 + 10.0 > max_len
+        {
+            return 3.0_f32.min((max_len * 0.2).max(1.5));
+        }
+        base
+    }
+
+    /// Maximum printable content length in millimeters when `max_length_mm` is set.
+    /// Subtracts both left and right effective margins from `max_length_mm`.
+    pub fn max_content_length_mm(&self) -> Option<f32> {
+        self.max_length_mm.map(|max_len| {
+            let margin = self.effective_margin_mm();
+            (max_len - margin * 2.0).max(2.0)
+        })
+    }
+
+    /// Maximum printable content width in pixels at the given DPI when `max_length_mm` is set.
+    pub fn max_content_width_px(&self, dpi: u16) -> Option<u32> {
+        Self::max_content_width_px_with_margin(self.max_length_mm, self.effective_margin_mm(), dpi)
+    }
+
+    /// Compute the maximum printable content width in pixels for a given total `max_length_mm`,
+    /// single-side `margin_mm`, and `dpi`.
+    pub fn max_content_width_px_with_margin(
+        max_length_mm: Option<f32>,
+        margin_mm: f32,
+        dpi: u16,
+    ) -> Option<u32> {
+        max_length_mm.map(|max_len| {
+            let dpi_f = if dpi > 0 { dpi as f32 } else { 180.0 };
+            let eff_margin = if margin_mm * 2.0 + 10.0 > max_len {
+                3.0_f32.min((max_len * 0.2).max(1.5))
+            } else {
+                margin_mm
+            };
+            let content_mm = (max_len - eff_margin * 2.0).max(2.0);
+            ((content_mm * dpi_f / 25.4).floor() as u32).max(1)
+        })
     }
 }
 
@@ -493,32 +550,77 @@ pub fn render_elements(
     font_margin: u32,
     renderer: &mut TextRenderer,
 ) -> Result<Option<LabelBitmap>> {
-    let mut result: Option<LabelBitmap> = None;
+    render_elements_with_max_width(
+        elements,
+        tape_width_px,
+        font_name,
+        font_margin,
+        None,
+        renderer,
+    )
+}
+
+/// Render an ordered element list into a single label bitmap, optionally confining
+/// the total width to `max_width_px` by automatically scaling down the font size
+/// of text elements when the initial composition exceeds `max_width_px`.
+///
+/// If the initial composition already fits within `max_width_px`, the natural
+/// (shorter) width is preserved without extra padding.
+pub fn render_elements_with_max_width(
+    elements: &[LabelElement],
+    tape_width_px: u32,
+    font_name: &str,
+    font_margin: u32,
+    max_width_px: Option<u32>,
+    renderer: &mut TextRenderer,
+) -> Result<Option<LabelBitmap>> {
+    render_elements_with_options(
+        elements,
+        tape_width_px,
+        font_name,
+        font_margin,
+        max_width_px,
+        false,
+        renderer,
+    )
+}
+
+/// Render an ordered element list into a single label bitmap, optionally confining
+/// the total width to `max_width_px` and optionally maximizing the font size
+/// (`fit_largest_font`) so text fills the largest possible font in the confined area.
+pub fn render_elements_with_options(
+    elements: &[LabelElement],
+    tape_width_px: u32,
+    font_name: &str,
+    font_margin: u32,
+    max_width_px: Option<u32>,
+    fit_largest_font: bool,
+    renderer: &mut TextRenderer,
+) -> Result<Option<LabelBitmap>> {
+    let font_settings = FontSettings {
+        name: font_name,
+        margin: font_margin,
+    };
+
+    // First pass: render all non-text segments and count text elements.
+    let mut non_text_segments: Vec<Option<LabelBitmap>> = Vec::with_capacity(elements.len());
+    let mut fixed_width_px: u32 = 0;
+    let mut non_empty_text_count: usize = 0;
+    let mut any_rotated_text = false;
 
     for element in elements {
-        let segment = match element {
+        match element {
             LabelElement::Text {
-                content,
-                font_size,
-                align,
-                rotation,
-                flip_h,
-                flip_v,
-            } => match render_text_segment(
-                renderer,
-                content,
-                *font_size,
-                *align,
-                *rotation,
-                tape_width_px,
-                &FontSettings {
-                    name: font_name,
-                    margin: font_margin,
-                },
-            ) {
-                Some(seg) => seg.mirrored(*flip_h, *flip_v),
-                None => continue,
-            },
+                content, rotation, ..
+            } => {
+                non_text_segments.push(None);
+                if !content.trim().is_empty() {
+                    non_empty_text_count += 1;
+                    if is_rotated(*rotation) {
+                        any_rotated_text = true;
+                    }
+                }
+            }
             LabelElement::Image {
                 image_data,
                 bitmap,
@@ -527,18 +629,30 @@ pub fn render_elements(
                 flip_h,
                 flip_v,
                 ..
-            } => match render_image_segment(
-                bitmap.as_ref(),
-                image_data,
-                *rotation,
-                *target_height,
-                tape_width_px,
-            ) {
-                Some(seg) => seg.mirrored(*flip_h, *flip_v),
-                None => continue,
-            },
-            LabelElement::CutMark => compose::cutmark(tape_width_px),
-            LabelElement::Padding { pixels } => compose::padding(tape_width_px, *pixels),
+            } => {
+                let seg = render_image_segment(
+                    bitmap.as_ref(),
+                    image_data,
+                    *rotation,
+                    *target_height,
+                    tape_width_px,
+                )
+                .map(|s| s.mirrored(*flip_h, *flip_v));
+                if let Some(ref s) = seg {
+                    fixed_width_px += s.width();
+                }
+                non_text_segments.push(seg);
+            }
+            LabelElement::CutMark => {
+                let seg = compose::cutmark(tape_width_px);
+                fixed_width_px += seg.width();
+                non_text_segments.push(Some(seg));
+            }
+            LabelElement::Padding { pixels } => {
+                let seg = compose::padding(tape_width_px, *pixels);
+                fixed_width_px += seg.width();
+                non_text_segments.push(Some(seg));
+            }
             LabelElement::QrCode {
                 content,
                 bitmap,
@@ -546,18 +660,300 @@ pub fn render_elements(
                 target_height,
                 flip_h,
                 flip_v,
-            } => match render_qr_segment(
-                bitmap.as_ref(),
-                content,
-                *rotation,
-                *target_height,
-                tape_width_px,
-            ) {
-                Some(seg) => seg.mirrored(*flip_h, *flip_v),
-                None => continue,
-            },
-        };
+            } => {
+                let seg = render_qr_segment(
+                    bitmap.as_ref(),
+                    content,
+                    *rotation,
+                    *target_height,
+                    tape_width_px,
+                )
+                .map(|s| s.mirrored(*flip_h, *flip_v));
+                if let Some(ref s) = seg {
+                    fixed_width_px += s.width();
+                }
+                non_text_segments.push(seg);
+            }
+        }
+    }
 
+    let mut text_segments: Vec<Option<LabelBitmap>> = Vec::with_capacity(elements.len());
+
+    if fit_largest_font && non_empty_text_count > 0 && !any_rotated_text {
+        // Fast path for a single unrotated text element in a confined area.
+        if non_empty_text_count == 1 && max_width_px.is_some() {
+            let target_text_w =
+                max_width_px.map(|max_w| max_w.saturating_sub(fixed_width_px).max(1));
+            for element in elements {
+                if let LabelElement::Text {
+                    content,
+                    align,
+                    flip_h,
+                    flip_v,
+                    ..
+                } = element
+                {
+                    if content.trim().is_empty() {
+                        text_segments.push(None);
+                    } else {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let seg = match renderer.render_text_fit_box(
+                            &lines,
+                            tape_width_px,
+                            target_text_w,
+                            font_name,
+                            font_margin,
+                            *align,
+                            true,
+                        ) {
+                            Ok(bmp) => Some(bmp.mirrored(*flip_h, *flip_v)),
+                            Err(e) => {
+                                error!("Text fit-box render failed: {}", e);
+                                None
+                            }
+                        };
+                        text_segments.push(seg);
+                    }
+                } else {
+                    text_segments.push(None);
+                }
+            }
+        } else {
+            // Multiple text elements or unconstrained width with fit_largest_font.
+            let mut initial_text_width_px: u32 = 0;
+            let mut initial_widths: Vec<u32> = Vec::with_capacity(elements.len());
+
+            for element in elements {
+                if let LabelElement::Text {
+                    content,
+                    font_size,
+                    align,
+                    rotation,
+                    flip_h,
+                    flip_v,
+                } = element
+                {
+                    if content.trim().is_empty() {
+                        initial_widths.push(0);
+                        text_segments.push(None);
+                    } else if font_size.is_some() && max_width_px.is_none() {
+                        let seg = render_text_segment_scaled(
+                            renderer,
+                            content,
+                            *font_size,
+                            *align,
+                            *rotation,
+                            tape_width_px,
+                            &font_settings,
+                            1.0,
+                        )
+                        .map(|s| s.mirrored(*flip_h, *flip_v));
+                        let w = seg.as_ref().map_or(0, |s| s.width());
+                        initial_text_width_px += w;
+                        initial_widths.push(w);
+                        text_segments.push(seg);
+                    } else {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let seg = renderer
+                            .render_text_fit_box(
+                                &lines,
+                                tape_width_px,
+                                None,
+                                font_name,
+                                font_margin,
+                                *align,
+                                false,
+                            )
+                            .ok()
+                            .map(|s| s.mirrored(*flip_h, *flip_v));
+                        let w = seg.as_ref().map_or(0, |s| s.width());
+                        initial_text_width_px += w;
+                        initial_widths.push(w);
+                        text_segments.push(seg);
+                    }
+                } else {
+                    initial_widths.push(0);
+                    text_segments.push(None);
+                }
+            }
+
+            if let Some(max_w) = max_width_px
+                && fixed_width_px + initial_text_width_px > max_w
+                && initial_text_width_px > 0
+            {
+                let target_text_w = max_w.saturating_sub(fixed_width_px).max(1);
+                let mut fitted_segments = Vec::with_capacity(elements.len());
+                for (element, init_w) in elements.iter().zip(initial_widths) {
+                    if let LabelElement::Text {
+                        content,
+                        align,
+                        flip_h,
+                        flip_v,
+                        ..
+                    } = element
+                    {
+                        if content.trim().is_empty() || init_w == 0 {
+                            fitted_segments.push(None);
+                        } else {
+                            let share_w = ((target_text_w as u64 * init_w as u64)
+                                / (initial_text_width_px as u64))
+                                .max(1) as u32;
+                            let lines: Vec<&str> = content.lines().collect();
+                            let seg = renderer
+                                .render_text_fit_box(
+                                    &lines,
+                                    tape_width_px,
+                                    Some(share_w),
+                                    font_name,
+                                    font_margin,
+                                    *align,
+                                    true,
+                                )
+                                .ok()
+                                .map(|s| s.mirrored(*flip_h, *flip_v));
+                            fitted_segments.push(seg);
+                        }
+                    } else {
+                        fitted_segments.push(None);
+                    }
+                }
+                text_segments = fitted_segments;
+            }
+        }
+    } else {
+        // Standard scale-down path (when fit_largest_font is false or text is rotated).
+        let mut initial_text_width_px: u32 = 0;
+        let mut has_text = false;
+
+        for element in elements {
+            if let LabelElement::Text {
+                content,
+                font_size,
+                align,
+                rotation,
+                flip_h,
+                flip_v,
+            } = element
+            {
+                let seg = render_text_segment_scaled(
+                    renderer,
+                    content,
+                    *font_size,
+                    *align,
+                    *rotation,
+                    tape_width_px,
+                    &font_settings,
+                    1.0,
+                )
+                .map(|s| s.mirrored(*flip_h, *flip_v));
+                if let Some(ref s) = seg {
+                    initial_text_width_px += s.width();
+                    has_text = true;
+                }
+                text_segments.push(seg);
+            } else {
+                text_segments.push(None);
+            }
+        }
+
+        let total_initial_width = fixed_width_px + initial_text_width_px;
+
+        // If max_width_px is set and the rendered label exceeds it, binary-search
+        // the largest font scale factor in (0.0, 1.0] that fits within the budget.
+        if let Some(max_w) = max_width_px
+            && total_initial_width > max_w
+            && has_text
+        {
+            let target_text_w = max_w.saturating_sub(fixed_width_px).max(1);
+            let mut low = 0.01_f32;
+            let mut high = 1.0_f32;
+            let mut best_text_segments: Option<Vec<Option<LabelBitmap>>> = None;
+
+            for _ in 0..12 {
+                let mid = (low + high) * 0.5;
+                let mut candidate_segments = Vec::with_capacity(elements.len());
+                let mut candidate_w: u32 = 0;
+
+                for element in elements {
+                    if let LabelElement::Text {
+                        content,
+                        font_size,
+                        align,
+                        rotation,
+                        flip_h,
+                        flip_v,
+                    } = element
+                    {
+                        let seg = render_text_segment_scaled(
+                            renderer,
+                            content,
+                            *font_size,
+                            *align,
+                            *rotation,
+                            tape_width_px,
+                            &font_settings,
+                            mid,
+                        )
+                        .map(|s| s.mirrored(*flip_h, *flip_v));
+                        if let Some(ref s) = seg {
+                            candidate_w += s.width();
+                        }
+                        candidate_segments.push(seg);
+                    } else {
+                        candidate_segments.push(None);
+                    }
+                }
+
+                if candidate_w <= target_text_w {
+                    best_text_segments = Some(candidate_segments);
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+
+            text_segments = match best_text_segments {
+                Some(best) => best,
+                None => {
+                    let mut min_segments = Vec::with_capacity(elements.len());
+                    for element in elements {
+                        if let LabelElement::Text {
+                            content,
+                            font_size,
+                            align,
+                            rotation,
+                            flip_h,
+                            flip_v,
+                        } = element
+                        {
+                            let seg = render_text_segment_scaled(
+                                renderer,
+                                content,
+                                *font_size,
+                                *align,
+                                *rotation,
+                                tape_width_px,
+                                &font_settings,
+                                low,
+                            )
+                            .map(|s| s.mirrored(*flip_h, *flip_v));
+                            min_segments.push(seg);
+                        } else {
+                            min_segments.push(None);
+                        }
+                    }
+                    min_segments
+                }
+            };
+        }
+    }
+
+    // Concatenate segments in composition order.
+    let mut result: Option<LabelBitmap> = None;
+    for (non_text, text) in non_text_segments.into_iter().zip(text_segments) {
+        let Some(segment) = text.or(non_text) else {
+            continue;
+        };
         result = Some(match result {
             Some(prev) => prev.append(&segment),
             None => segment,
@@ -567,8 +963,10 @@ pub fn render_elements(
     Ok(result)
 }
 
-/// Render a single text element to a tape-height bitmap, or `None` to skip it.
-fn render_text_segment(
+/// Render a single text element to a tape-height bitmap with an optional font scale factor,
+/// or `None` to skip it.
+#[allow(clippy::too_many_arguments)]
+fn render_text_segment_scaled(
     renderer: &mut TextRenderer,
     content: &str,
     font_size: Option<f32>,
@@ -576,6 +974,7 @@ fn render_text_segment(
     rotation: f32,
     tape_width_px: u32,
     font: &FontSettings,
+    scale: f32,
 ) -> Option<LabelBitmap> {
     if content.is_empty() {
         return None;
@@ -585,7 +984,18 @@ fn render_text_segment(
 
     // For rotated text with auto size, pick a size whose rotated bounding box
     // fits within the tape height.
-    let effective_font_size = rotation_aware_font_size(font_size, rotation, &lines, tape_width_px);
+    let base_font_size = rotation_aware_font_size(font_size, rotation, &lines, tape_width_px);
+
+    let effective_font_size = if (scale - 1.0).abs() < 1e-5 {
+        base_font_size
+    } else {
+        let unscaled = base_font_size.unwrap_or_else(|| {
+            let num_lines = lines.len().max(1) as f32;
+            let available_height = tape_width_px.saturating_sub(font.margin * 2) as f32;
+            (available_height / (num_lines * 1.2)).max(4.0)
+        });
+        Some((unscaled * scale).max(1.0))
+    };
 
     // Rotated text needs a taller render area so all lines stay visible; the
     // height becomes tape length after rotation.
@@ -972,6 +1382,8 @@ mod tests {
             flip_h: false,
             flip_v: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: false,
             elements: vec![
                 LabelElement::Text {
                     content: "Hi".into(),
@@ -1034,6 +1446,8 @@ mod tests {
             flip_h: false,
             flip_v: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: false,
             elements: vec![LabelElement::CutMark],
         };
         let text = doc.to_toml_string().unwrap();
@@ -1051,6 +1465,8 @@ mod tests {
             flip_h: false,
             flip_v: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: false,
             elements: vec![LabelElement::Image {
                 path: None,
                 image_data: b"not a real image".to_vec(),
@@ -1083,6 +1499,8 @@ mod tests {
             flip_h: false,
             flip_v: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: false,
             elements: vec![LabelElement::Text {
                 content: content.into(),
                 font_size: Some(24.0),
@@ -1223,6 +1641,133 @@ mod tests {
     }
 
     #[test]
+    fn test_max_length_mm_auto_margin_and_confinement() {
+        let mut doc =
+            text_doc("Very Long Label Text That Needs Auto-Shrinking To Fit Inside 100mm");
+        doc.font_name = "Inter".into();
+        if let LabelElement::Text { font_size, .. } = &mut doc.elements[0] {
+            *font_size = None;
+        }
+
+        // Default ~27mm margin with 100mm max length leaves 46mm for content
+        doc.max_length_mm = Some(100.0);
+        assert!(!doc.is_pretrim());
+        assert_eq!(doc.effective_margin_mm(), 27.0);
+        assert_eq!(doc.max_content_length_mm(), Some(46.0));
+
+        // When max_length_mm is 50mm (where 2 * 27mm = 54mm won't fit), auto-switches to 3mm pre-trim
+        doc.max_length_mm = Some(50.0);
+        assert!(doc.is_pretrim());
+        assert_eq!(doc.effective_margin_mm(), 3.0);
+        assert_eq!(doc.max_content_length_mm(), Some(44.0));
+
+        // Round-trip through TOML preserves max_length_mm
+        let toml_str = doc.to_toml_string().unwrap();
+        let parsed = LabelDocument::from_toml_str(&toml_str).unwrap();
+        assert_eq!(parsed.max_length_mm, Some(50.0));
+
+        // Render unconstrained vs constrained
+        let mut renderer = TextRenderer::new();
+        let unconstrained = render_elements(&doc.elements, 76, &doc.font_name, 0, &mut renderer)
+            .unwrap()
+            .unwrap();
+        let max_px = doc.max_content_width_px(180).unwrap();
+        let constrained = render_elements_with_max_width(
+            &doc.elements,
+            76,
+            &doc.font_name,
+            0,
+            Some(max_px),
+            &mut renderer,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(unconstrained.width() > max_px);
+        assert!(
+            constrained.width() <= max_px,
+            "constrained width {} should be <= max_px {}",
+            constrained.width(),
+            max_px
+        );
+
+        // Short text that already fits within max_px keeps its exact natural width
+        let short_doc = LabelDocument {
+            max_length_mm: Some(100.0),
+            margin_mm: Some(3.0),
+            ..text_doc("OK")
+        };
+        let short_unconstrained =
+            render_elements(&short_doc.elements, 76, "Inter", 0, &mut renderer)
+                .unwrap()
+                .unwrap();
+        let short_max_px = short_doc.max_content_width_px(180).unwrap();
+        let short_constrained = render_elements_with_max_width(
+            &short_doc.elements,
+            76,
+            "Inter",
+            0,
+            Some(short_max_px),
+            &mut renderer,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(short_unconstrained.width(), short_constrained.width());
+    }
+
+    #[test]
+    fn test_fit_largest_font_in_confined_area() {
+        let mut doc = text_doc("SERVER RACK A-01\n10.0.4.15");
+        doc.font_name = "Inter".into();
+        doc.max_length_mm = Some(100.0);
+        doc.fit_largest_font = true;
+
+        // With fit_largest_font enabled and no explicit margin, 100mm label uses 3mm compact margin (94mm content)
+        assert!(doc.is_pretrim());
+        assert_eq!(doc.effective_margin_mm(), 3.0);
+        assert_eq!(doc.max_content_length_mm(), Some(94.0));
+
+        let mut renderer = TextRenderer::new();
+        let max_px = doc.max_content_width_px(180).unwrap();
+        let fitted = render_elements_with_options(
+            &doc.elements,
+            128,
+            &doc.font_name,
+            0,
+            Some(max_px),
+            true,
+            &mut renderer,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(
+            fitted.width() <= max_px,
+            "fitted width {} should be <= max_px {}",
+            fitted.width(),
+            max_px
+        );
+        // Should be significantly wider than the manual 24pt render because it scales UP to fill the 128px tape height!
+        let small = render_elements_with_options(
+            &doc.elements,
+            128,
+            &doc.font_name,
+            0,
+            Some(max_px),
+            false,
+            &mut renderer,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            fitted.width() > small.width() * 2,
+            "fit_largest_font width {} should be > 2x small width {}",
+            fitted.width(),
+            small.width()
+        );
+    }
+
+    #[test]
     fn test_qrcode_element_serialization_and_rendering() {
         let doc = LabelDocument {
             version: DOCUMENT_VERSION,
@@ -1233,6 +1778,8 @@ mod tests {
             flip_h: false,
             flip_v: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: false,
             elements: vec![
                 LabelElement::qr_from_content("https://example.com"),
                 LabelElement::Text {
@@ -1275,6 +1822,8 @@ mod tests {
             flip_h: false,
             flip_v: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: false,
             elements: vec![LabelElement::qr_from_content(
                 "https://example.com/item/{{item_id}}",
             )],

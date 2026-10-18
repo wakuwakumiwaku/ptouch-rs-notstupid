@@ -161,8 +161,8 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
 
             let blank_line = vec![0u8; (state.printer_max_px as usize).div_ceil(8)];
 
-            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
-            let margin_mm = state.margin_mm.unwrap_or(27.0);
+            let is_pretrim = state.is_pretrim();
+            let margin_mm = state.effective_margin_mm();
 
             let (raster_lines, chain_print, precut) =
                 if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
@@ -351,11 +351,23 @@ pub fn do_batch_print(state: &mut AppState) {
             continue;
         }
 
-        let result = ptouch_render::document::render_elements(
+        let max_width_px = if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+            LabelDocument::max_content_width_px_with_margin(
+                item.document.max_length_mm,
+                2.0,
+                state.printer_dpi,
+            )
+        } else {
+            item.document.max_content_width_px(state.printer_dpi)
+        };
+
+        let result = ptouch_render::document::render_elements_with_options(
             &item.document.elements,
             state.tape_width_px,
             &item.document.font_name,
             item.document.font_margin,
+            max_width_px,
+            item.document.fit_largest_font,
             &mut renderer,
         );
 
@@ -446,6 +458,8 @@ fn do_save_layout(state: &mut AppState) {
         flip_h: state.overall_flip_h,
         flip_v: state.overall_flip_v,
         margin_mm: state.margin_mm,
+        max_length_mm: state.max_length_mm,
+        fit_largest_font: state.fit_largest_font,
         elements: state.elements.clone(),
     };
 
@@ -505,7 +519,10 @@ fn do_open_layout(state: &mut AppState) {
     }
 }
 
-pub(crate) fn apply_layout(state: &mut AppState, document: LabelDocument) {
+pub(crate) fn apply_layout(state: &mut AppState, mut document: LabelDocument) {
+    if document.max_length_mm.is_none() {
+        document.fit_largest_font = true;
+    }
     let doc_clone = document.clone();
     if !state.printer_target.is_bluetooth() {
         state.tape_width_mm = document.tape_width_mm;
@@ -516,6 +533,8 @@ pub(crate) fn apply_layout(state: &mut AppState, document: LabelDocument) {
     state.overall_flip_h = document.flip_h;
     state.overall_flip_v = document.flip_v;
     state.margin_mm = document.margin_mm;
+    state.max_length_mm = document.max_length_mm;
+    state.fit_largest_font = document.fit_largest_font;
     state.elements = document.elements;
     state.selected_element = if state.elements.is_empty() {
         None
@@ -596,6 +615,8 @@ mod tests {
             flip_h: false,
             flip_v: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: false,
             elements: vec![LabelElement::CutMark],
         };
         LabelDocument::from_toml_str(&document.to_toml_string().unwrap()).unwrap()

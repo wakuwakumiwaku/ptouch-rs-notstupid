@@ -233,6 +233,12 @@ pub struct AppState {
     /// None => Centered Full (~27mm symmetrical margin, 0mm scrap).
     /// Some(mm) => Custom margin. If < 24.5mm, automatically triggers pre-trimming the leader scrap!
     pub margin_mm: Option<f32>,
+    /// Optional maximum total finished label length in millimeters (including left & right margins).
+    /// None => Auto length (grows with content).
+    /// Some(mm) => Confines total label length to <= mm by auto-shrinking text font size when needed.
+    pub max_length_mm: Option<f32>,
+    /// Fit largest possible font in the confined area (tight ink bounding box + balanced multi-line wrap).
+    pub fit_largest_font: bool,
 }
 
 impl Default for AppState {
@@ -283,6 +289,8 @@ impl Default for AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             request_text_focus: false,
             margin_mm: None,
+            max_length_mm: None,
+            fit_largest_font: true,
         }
     }
 }
@@ -295,6 +303,86 @@ impl AppState {
 
     pub fn is_printer_busy(&self) -> bool {
         self.operation_in_progress || self.connecting
+    }
+
+    /// Effective margin in millimeters for the active label, accounting for `max_length_mm`.
+    pub fn effective_margin_mm(&self) -> f32 {
+        let base =
+            if self.margin_mm.is_none() && self.max_length_mm.is_some() && self.fit_largest_font {
+                3.0
+            } else {
+                self.margin_mm.unwrap_or(27.0)
+            };
+        if let Some(max_len) = self.max_length_mm
+            && base * 2.0 + 10.0 > max_len
+        {
+            return 3.0_f32.min((max_len * 0.2).max(1.5));
+        }
+        base
+    }
+
+    /// True if the active label requires pre-trimming the 24.5mm hardware leader scrap.
+    pub fn is_pretrim(&self) -> bool {
+        if self.margin_mm.is_none() && self.max_length_mm.is_none() {
+            return false;
+        }
+        self.effective_margin_mm() < 24.5
+    }
+
+    /// Set `max_length_mm` for the active label, automatically switching to a 3.0mm compact
+    /// margin if `fit_largest_font` is enabled (and no custom margin was set) or if the
+    /// current/default (~27mm) margin would not fit within `max_len`.
+    pub fn set_max_length_mm(&mut self, max_len: Option<f32>) {
+        if let Some(len) = max_len {
+            let clamped = len.clamp(10.0, 1000.0);
+            self.max_length_mm = Some(clamped);
+            if self.cut_mode != CutMarginMode::ChainPrint {
+                let cur_margin = self.margin_mm.unwrap_or(27.0);
+                if (self.fit_largest_font && self.margin_mm.is_none())
+                    || cur_margin * 2.0 + 10.0 > clamped
+                {
+                    let compact = 3.0_f32.min((clamped * 0.2).max(1.5));
+                    self.margin_mm = Some(compact);
+                    self.cut_mode = CutMarginMode::PretrimCut;
+                    self.small_margin_mm = compact;
+                }
+            }
+        } else {
+            self.max_length_mm = None;
+        }
+        self.sync_active_to_batch();
+        self.mark_dirty();
+    }
+
+    /// Toggle the "Fit largest possible font in confined area" option.
+    pub fn set_fit_largest_font(&mut self, enabled: bool) {
+        self.fit_largest_font = enabled;
+        if enabled
+            && let Some(clamped) = self.max_length_mm
+            && self.margin_mm.is_none()
+            && self.cut_mode != CutMarginMode::ChainPrint
+        {
+            let compact = 3.0_f32.min((clamped * 0.2).max(1.5));
+            self.margin_mm = Some(compact);
+            self.cut_mode = CutMarginMode::PretrimCut;
+            self.small_margin_mm = compact;
+        }
+        self.sync_active_to_batch();
+        self.mark_dirty();
+    }
+
+    /// Maximum printable content width in pixels for the active label, if `max_length_mm` is set.
+    pub fn max_content_width_px(&self) -> Option<u32> {
+        let side_margin = if self.cut_mode == CutMarginMode::ChainPrint {
+            2.0
+        } else {
+            self.effective_margin_mm()
+        };
+        LabelDocument::max_content_width_px_with_margin(
+            self.max_length_mm,
+            side_margin,
+            self.printer_dpi,
+        )
     }
 
     /// Update the tape width in pixels based on the current tape_width_mm
@@ -353,6 +441,8 @@ impl AppState {
                     flip_h: false,
                     flip_v: false,
                     margin_mm: margin,
+                    max_length_mm: None,
+                    fit_largest_font: true,
                     elements: vec![LabelElement::Text {
                         content: text.to_string(),
                         font_size: None,
@@ -380,6 +470,8 @@ impl AppState {
             self.font_name = self.batch_items[0].document.font_name.clone();
             self.copies = self.batch_items[0].copies.max(1);
             self.margin_mm = self.batch_items[0].document.margin_mm;
+            self.max_length_mm = self.batch_items[0].document.max_length_mm;
+            self.fit_largest_font = self.batch_items[0].document.fit_largest_font;
             self.selected_element = Some(0);
             self.mark_dirty();
         }
@@ -425,6 +517,8 @@ impl AppState {
         self.overall_flip_h = doc.flip_h;
         self.overall_flip_v = doc.flip_v;
         self.margin_mm = doc.margin_mm;
+        self.max_length_mm = doc.max_length_mm;
+        self.fit_largest_font = doc.fit_largest_font;
         self.elements = doc.elements;
         self.selected_element = if self.elements.is_empty() {
             None
@@ -447,6 +541,8 @@ impl AppState {
             flip_h: false,
             flip_v: false,
             margin_mm: self.margin_mm,
+            max_length_mm: self.max_length_mm,
+            fit_largest_font: self.fit_largest_font,
             elements: vec![LabelElement::Text {
                 content: format!("Label {}", new_num),
                 font_size: None,
@@ -508,6 +604,9 @@ impl AppState {
         self.font_margin = doc.font_margin;
         self.overall_flip_h = doc.flip_h;
         self.overall_flip_v = doc.flip_v;
+        self.margin_mm = doc.margin_mm;
+        self.max_length_mm = doc.max_length_mm;
+        self.fit_largest_font = doc.fit_largest_font;
         self.elements = doc.elements;
         self.selected_element = if self.elements.is_empty() {
             None
@@ -529,6 +628,8 @@ impl AppState {
             flip_h: self.overall_flip_h,
             flip_v: self.overall_flip_v,
             margin_mm: self.margin_mm,
+            max_length_mm: self.max_length_mm,
+            fit_largest_font: self.fit_largest_font,
             elements: self.elements.clone(),
         }
     }

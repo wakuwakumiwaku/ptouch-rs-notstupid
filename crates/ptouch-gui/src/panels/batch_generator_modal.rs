@@ -276,6 +276,8 @@ fn execute_generation(state: &mut AppState, generator: &BatchGeneratorState) {
             flip_h: false,
             flip_v: false,
             margin_mm: state.margin_mm,
+            max_length_mm: state.max_length_mm,
+            fit_largest_font: state.fit_largest_font,
             elements: vec![LabelElement::Text {
                 content: text.clone(),
                 font_size: None,
@@ -306,6 +308,8 @@ fn execute_generation(state: &mut AppState, generator: &BatchGeneratorState) {
         state.tape_width_mm = doc.tape_width_mm;
         state.font_name = doc.font_name;
         state.font_margin = doc.font_margin;
+        state.margin_mm = doc.margin_mm;
+        state.max_length_mm = doc.max_length_mm;
         state.elements = doc.elements;
         state.selected_element = if state.elements.is_empty() {
             None

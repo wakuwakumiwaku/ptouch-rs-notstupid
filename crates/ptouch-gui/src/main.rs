@@ -43,6 +43,13 @@ fn main() -> eframe::Result<()> {
     if let Some(icon) = load_window_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
+    if std::env::var("PTOUCH_SCREENSHOT").is_ok() {
+        viewport = viewport
+            .with_inner_size([1600.0, 900.0])
+            .with_min_inner_size([1600.0, 900.0])
+            .with_max_inner_size([1600.0, 900.0])
+            .with_resizable(false);
+    }
 
     let layout_file = std::env::args().nth(1).filter(|a| !a.starts_with('-'));
 

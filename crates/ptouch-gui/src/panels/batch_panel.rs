@@ -116,86 +116,86 @@ pub fn show_batch_panel(
                          When unchecked, prints as a continuous strip (cutting only after the last label).",
                     );
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let connected = state.printer_connected;
-                    let busy = state.is_printer_busy();
-                    let can_print_all = connected && !busy && total_prints > 0;
+                ui.separator();
 
-                    let print_btn_text = if busy {
-                        format!("⏳ Printing... ({total_prints} Prints)")
-                    } else if total_prints > 0 {
-                        format!("🖨 Print All Labels ({total_prints} Prints)")
-                    } else {
-                        "🖨 Print All Labels (0 Prints)".to_string()
-                    };
+                // Summary badge
+                let cut_tag = if state.auto_cut && state.cut_mode != crate::state::CutMarginMode::ChainPrint {
+                    "✂ Cut each"
+                } else {
+                    "⛓ Continuous strip"
+                };
 
-                    let btn = egui::Button::new(
-                        egui::RichText::new(print_btn_text)
-                            .strong()
-                            .size(13.0)
-                            .color(egui::Color32::WHITE),
-                    )
-                    .fill(if can_print_all {
-                        egui::Color32::from_rgb(22, 101, 52) // Dark green
-                    } else {
-                        egui::Color32::from_rgb(120, 120, 120)
-                    });
+                let trim_summary = if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+                    String::new()
+                } else if pretrim_count > 0 && centered_count > 0 {
+                    format!(" • Mixed: {centered_count} centered, {pretrim_count} pre-trimmed ({total_scrap_mm:.1}mm scrap)")
+                } else if pretrim_count > 0 {
+                    format!(" • All {pretrim_count} pre-trimmed ({total_scrap_mm:.1}mm scrap)")
+                } else {
+                    " • All centered (0mm scrap)".to_string()
+                };
 
-                    if can_print_all {
-                        if ui.add(btn).clicked() {
-                            crate::panels::toolbar::do_batch_print(state);
-                        }
-                    } else {
-                        let reason = if !connected {
-                            "Printer is not connected (check USB cable / power)"
-                        } else if busy {
-                            "Printing in progress..."
-                        } else {
-                            "All label copies are set to 0. Set at least one label to 1 or more copies."
-                        };
-                        ui.add_enabled(false, btn).on_disabled_hover_text(reason);
-                    }
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{total_labels} label(s) • {total_prints} print(s) • ~{:.1} cm • {cut_tag}{trim_summary}",
+                        total_batch_mm / 10.0
+                    ))
+                    .strong()
+                    .color(egui::Color32::from_rgb(50, 70, 90)),
+                );
 
-                    // Cancel batch button when busy
-                    if state.operation_in_progress
-                        && ui
-                            .button(
-                                egui::RichText::new("⏹ Cancel Batch")
-                                    .color(egui::Color32::from_rgb(220, 38, 38))
-                                    .strong(),
-                            )
-                            .on_hover_text("Abort remaining labels in the batch immediately")
-                            .clicked()
-                    {
-                        state.request_cancel();
-                    }
+                // Cancel batch button when busy
+                if state.operation_in_progress
+                    && ui
+                        .button(
+                            egui::RichText::new("⏹ Cancel Batch")
+                                .color(egui::Color32::from_rgb(220, 38, 38))
+                                .strong(),
+                        )
+                        .on_hover_text("Abort remaining labels in the batch immediately")
+                        .clicked()
+                {
+                    state.request_cancel();
+                }
 
-                    // Summary badge
-                    let cut_tag = if state.auto_cut && state.cut_mode != crate::state::CutMarginMode::ChainPrint {
-                        "✂ Cut each"
-                    } else {
-                        "⛓ Continuous strip"
-                    };
+                let connected = state.printer_connected;
+                let busy = state.is_printer_busy();
+                let can_print_all = connected && !busy && total_prints > 0;
 
-                    let trim_summary = if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
-                        String::new()
-                    } else if pretrim_count > 0 && centered_count > 0 {
-                        format!(" • Mixed: {centered_count} centered, {pretrim_count} pre-trimmed ({total_scrap_mm:.1}mm scrap)")
-                    } else if pretrim_count > 0 {
-                        format!(" • All {pretrim_count} pre-trimmed ({total_scrap_mm:.1}mm scrap)")
-                    } else {
-                        " • All centered (0mm scrap)".to_string()
-                    };
+                let print_btn_text = if busy {
+                    format!("⏳ Printing... ({total_prints} Prints)")
+                } else if total_prints > 0 {
+                    format!("🖨 Print All Labels ({total_prints} Prints)")
+                } else {
+                    "🖨 Print All Labels (0 Prints)".to_string()
+                };
 
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{total_labels} label(s) • {total_prints} print(s) • ~{:.1} cm • {cut_tag}{trim_summary}",
-                            total_batch_mm / 10.0
-                        ))
+                let btn = egui::Button::new(
+                    egui::RichText::new(print_btn_text)
                         .strong()
-                        .color(egui::Color32::from_rgb(50, 70, 90)),
-                    );
+                        .size(13.0)
+                        .color(egui::Color32::WHITE),
+                )
+                .fill(if can_print_all {
+                    egui::Color32::from_rgb(22, 101, 52) // Dark green
+                } else {
+                    egui::Color32::from_rgb(120, 120, 120)
                 });
+
+                if can_print_all {
+                    if ui.add(btn).clicked() {
+                        crate::panels::toolbar::do_batch_print(state);
+                    }
+                } else {
+                    let reason = if !connected {
+                        "Printer is not connected (check USB cable / power)"
+                    } else if busy {
+                        "Printing in progress..."
+                    } else {
+                        "All label copies are set to 0. Set at least one label to 1 or more copies."
+                    };
+                    ui.add_enabled(false, btn).on_disabled_hover_text(reason);
+                }
             });
         });
 
@@ -238,6 +238,7 @@ pub fn show_batch_panel(
             let mut to_edit = None;
             let mut active_text_changed = false;
             let mut active_margin_changed = false;
+            let mut active_length_changed = false;
             let active_idx = state.active_batch_index;
             let default_tape_px = state.tape_width_px;
 
@@ -466,19 +467,28 @@ pub fn show_batch_panel(
                                     .on_hover_text("Double-click to open and edit in Designer");
 
                                 ui.add_space(2.0);
+                                let cur_margin = item.document.effective_margin_mm();
+                                let total_finished_mm = mm_w + cur_margin * 2.0;
+                                let dim_str = if let Some(max_len) = item.document.max_length_mm {
+                                    format!(
+                                        "Content: {:.1} mm × {:.1} mm  •  Total: {:.1} mm (≤ {:.0} mm)  •  Tape: {} mm  •  Font: {}",
+                                        mm_w, mm_h, total_finished_mm, max_len, item.document.tape_width_mm, item.document.font_name
+                                    )
+                                } else {
+                                    format!(
+                                        "Content: {:.1} mm × {:.1} mm  •  Total: {:.1} mm  •  Tape: {} mm  •  Font: {}",
+                                        mm_w, mm_h, total_finished_mm, item.document.tape_width_mm, item.document.font_name
+                                    )
+                                };
                                 ui.label(
-                                    egui::RichText::new(format!(
-                                        "Dimensions: {:.1} mm × {:.1} mm  •  Tape: {} mm  •  Font: {}",
-                                        mm_w, mm_h, item.document.tape_width_mm, item.document.font_name
-                                    ))
-                                    .size(10.5)
-                                    .color(egui::Color32::from_rgb(110, 115, 125)),
+                                    egui::RichText::new(dim_str)
+                                        .size(10.5)
+                                        .color(egui::Color32::from_rgb(110, 115, 125)),
                                 );
 
                                 ui.add_space(4.0);
-                                ui.horizontal(|ui| {
+                                ui.horizontal_wrapped(|ui| {
                                     let is_pretrim = item.document.is_pretrim();
-                                    let cur_margin = item.document.effective_margin_mm();
 
                                     if is_pretrim {
                                         ui.label(
@@ -522,6 +532,74 @@ pub fn show_batch_panel(
                                         item.dirty = true;
                                         if is_active {
                                             active_margin_changed = true;
+                                        }
+                                    }
+
+                                    ui.separator();
+
+                                    ui.small("📐 Max:");
+                                    let is_auto_len = item.document.max_length_mm.is_none();
+                                    if ui
+                                        .selectable_label(is_auto_len, "Auto")
+                                        .on_hover_text("Natural label length")
+                                        .clicked()
+                                    {
+                                        item.document.max_length_mm = None;
+                                        item.dirty = true;
+                                        if is_active {
+                                            active_length_changed = true;
+                                        }
+                                    }
+                                    let is_50_len = item.document.max_length_mm == Some(50.0);
+                                    if ui
+                                        .selectable_label(is_50_len, "50mm")
+                                        .on_hover_text("Confine finished label length to ≤ 50 mm")
+                                        .clicked()
+                                    {
+                                        item.document.max_length_mm = Some(50.0);
+                                        item.dirty = true;
+                                        if is_active {
+                                            active_length_changed = true;
+                                        }
+                                    }
+                                    let is_100_len = item.document.max_length_mm == Some(100.0);
+                                    if ui
+                                        .selectable_label(is_100_len, "100mm")
+                                        .on_hover_text("Confine finished label length to ≤ 100 mm")
+                                        .clicked()
+                                    {
+                                        item.document.max_length_mm = Some(100.0);
+                                        item.dirty = true;
+                                        if is_active {
+                                            active_length_changed = true;
+                                        }
+                                    }
+                                    if let Some(mut max_len) = item.document.max_length_mm {
+                                        if ui
+                                            .add(
+                                                egui::DragValue::new(&mut max_len)
+                                                    .range(10.0..=1000.0)
+                                                    .speed(1.0)
+                                                    .prefix("≤ ")
+                                                    .suffix(" mm"),
+                                            )
+                                            .changed()
+                                        {
+                                            item.document.max_length_mm = Some(max_len);
+                                            item.dirty = true;
+                                            if is_active {
+                                                active_length_changed = true;
+                                            }
+                                        }
+                                        if ui
+                                            .checkbox(&mut item.document.fit_largest_font, "🔠 Fit largest font")
+                                            .on_hover_text("Automatically scale text to the largest possible font that fits in the confined area")
+                                            .changed()
+                                        {
+                                            item.dirty = true;
+                                            if is_active {
+                                                active_length_changed = true;
+                                            }
                                         }
                                     }
                                 });
@@ -634,6 +712,13 @@ pub fn show_batch_panel(
                     state.batch_items[state.active_batch_index].document.margin_mm;
                 state.mark_dirty();
             }
+            if active_length_changed && state.active_batch_index < state.batch_items.len() {
+                state.max_length_mm =
+                    state.batch_items[state.active_batch_index].document.max_length_mm;
+                state.fit_largest_font =
+                    state.batch_items[state.active_batch_index].document.fit_largest_font;
+                state.mark_dirty();
+            }
             if let Some(idx) = to_duplicate {
                 state.duplicate_batch_item(idx);
             }
@@ -656,13 +741,17 @@ pub fn update_batch_item_previews(
     state: &mut AppState,
     renderer: &mut ptouch_render::text::TextRenderer,
 ) {
+    let dpi = state.printer_dpi;
     for item in &mut state.batch_items {
         if item.preview_texture.is_none() || item.dirty {
-            if let Ok(Some(bitmap)) = ptouch_render::document::render_elements(
+            let max_width_px = item.document.max_content_width_px(dpi);
+            if let Ok(Some(bitmap)) = ptouch_render::document::render_elements_with_options(
                 &item.document.elements,
                 state.tape_width_px,
                 &item.document.font_name,
                 item.document.font_margin,
+                max_width_px,
+                item.document.fit_largest_font,
                 renderer,
             ) {
                 let mirrored = bitmap.mirrored(item.document.flip_h, item.document.flip_v);
@@ -753,7 +842,10 @@ pub fn do_open_batch(state: &mut AppState) {
 
 pub(crate) fn apply_loaded_batch(state: &mut AppState, batch: ptouch_render::document::LabelBatch) {
     state.batch_items.clear();
-    for (idx, entry) in batch.labels.into_iter().enumerate() {
+    for (idx, mut entry) in batch.labels.into_iter().enumerate() {
+        if entry.document.max_length_mm.is_none() {
+            entry.document.fit_largest_font = true;
+        }
         let id = state.next_batch_item_id;
         state.next_batch_item_id += 1;
         let title = if entry.title.is_empty() {
@@ -783,6 +875,8 @@ pub(crate) fn apply_loaded_batch(state: &mut AppState, batch: ptouch_render::doc
         state.overall_flip_h = doc.flip_h;
         state.overall_flip_v = doc.flip_v;
         state.margin_mm = doc.margin_mm;
+        state.max_length_mm = doc.max_length_mm;
+        state.fit_largest_font = doc.fit_largest_font;
         state.elements = doc.elements;
         state.selected_element = if state.elements.is_empty() {
             None
