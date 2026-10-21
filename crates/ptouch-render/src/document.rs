@@ -1083,12 +1083,11 @@ fn render_qr_segment(
     target_height: Option<u32>,
     tape_width_px: u32,
 ) -> Option<LabelBitmap> {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
+    if content.trim().is_empty() {
         return None;
     }
     let desired_h = target_height.unwrap_or(tape_width_px).min(tape_width_px);
-    let mut qr_bmp = crate::qr::render_qr_code(trimmed, desired_h).ok()?;
+    let mut qr_bmp = crate::qr::render_qr_code(content, desired_h).ok()?;
 
     if is_rotated(rotation) {
         qr_bmp = qr_bmp.rotate(rotation);
@@ -1809,6 +1808,38 @@ mod tests {
             .expect("not empty");
         assert_eq!(rendered.height(), 128);
         assert!(rendered.width() > 100);
+    }
+
+    #[test]
+    fn test_qr_document_preserves_payload_whitespace() {
+        let content = "\tASSET-42\r\n";
+        let mut doc = text_doc("");
+        doc.elements = vec![LabelElement::qr_from_content("{{asset}}")];
+        doc.apply_values(&BTreeMap::from([("asset".into(), content.into())]));
+        let loaded = LabelDocument::from_toml_str(&doc.to_toml_string().unwrap()).unwrap();
+        let mut renderer = TextRenderer::new();
+        let bitmap = render_elements(&loaded.elements, 128, "", 0, &mut renderer)
+            .unwrap()
+            .unwrap();
+
+        // Compare the composed modules to the exact template value, not a
+        // second call to our QR renderer (which could repeat the same bug).
+        let code = qrcode::QrCode::new(content.as_bytes()).unwrap();
+        let modules = code.width() as u32;
+        let scale = 128 / (modules + 4);
+        let size = (modules + 4) * scale;
+        assert_eq!(bitmap.width(), size);
+        assert_eq!(bitmap.height(), 128);
+        let y_offset = (128 - size) / 2;
+        for y in 0..modules {
+            for x in 0..modules {
+                assert_eq!(
+                    bitmap.get_pixel((x + 2) * scale, y_offset + (y + 2) * scale),
+                    code[(x as usize, y as usize)] == qrcode::Color::Dark,
+                    "module ({x}, {y})"
+                );
+            }
+        }
     }
 
     #[test]

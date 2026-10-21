@@ -16,15 +16,15 @@ use crate::{RenderError, Result};
 /// - `target_height`: The maximum available height in pixels (e.g. tape printable height).
 ///
 /// Returns a square `LabelBitmap` with the QR code and a standard 2-module quiet zone.
+/// Non-blank payloads are encoded verbatim, including surrounding whitespace.
 pub fn render_qr_code(content: &str, target_height: u32) -> Result<LabelBitmap> {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
+    if content.trim().is_empty() {
         return Err(RenderError::Layout(
             "QR code content cannot be empty".to_string(),
         ));
     }
 
-    let code = qrcode::QrCode::new(trimmed.as_bytes())
+    let code = qrcode::QrCode::new(content.as_bytes())
         .map_err(|e| RenderError::Layout(format!("QR code generation failed: {e}")))?;
 
     let module_count = code.width() as u32;
@@ -90,6 +90,26 @@ mod tests {
         // Quiet zone outer border must be white
         assert!(!bmp.get_pixel(0, 0));
         assert!(!bmp.get_pixel(bmp.width() - 1, bmp.height() - 1));
+    }
+
+    #[test]
+    fn test_qr_preserves_payload_whitespace() {
+        for content in [" ASSET-42 ", "\tASSET-42\r\n", "\u{2003}ASSET-42\u{a0}"] {
+            let bitmap = render_qr_code(content, 128).unwrap();
+            let code = qrcode::QrCode::new(content.as_bytes()).unwrap();
+            let modules = code.width() as u32;
+            let scale = 128 / (modules + 4);
+            assert_eq!(bitmap.width(), (modules + 4) * scale);
+            for y in 0..modules {
+                for x in 0..modules {
+                    assert_eq!(
+                        bitmap.get_pixel((x + 2) * scale, (y + 2) * scale),
+                        code[(x as usize, y as usize)] == qrcode::Color::Dark,
+                        "payload {content:?}, module ({x}, {y})"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
