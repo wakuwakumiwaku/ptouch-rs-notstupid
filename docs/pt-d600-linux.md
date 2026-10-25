@@ -202,6 +202,10 @@ This project provides multiple ways to handle this in `ptouch-gui` and `ptouch-c
 - Emergency print cancellation button (`Cancel Print`) and live worker status indicators.
 - Synchronized multi-label batch cutting to prevent buffer desync and cutter stalling.
 - Pure-Rust 1-bit integer module QR code generation with quiet zones, scannable with zero thermal printhead subpixel blur.
+- Composite transparent image pixels on white tape before scaling, background
+  detection and binarization. Black artwork on transparent PNG backgrounds stays
+  visible in image imports and embedded layouts; opaque-image auto-inversion is
+  unchanged.
 - Support JPEG export, PNG fallback for unknown extensions, and finish image
   encoding before opening the destination so an encoder error does not
   truncate an existing file. This is not an atomic-write or disk-full guarantee.

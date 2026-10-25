@@ -182,9 +182,21 @@ fn render_svg_data(data: &[u8], target_height: Option<u32>) -> Result<DynamicIma
 
 /// Convert a `DynamicImage` to a 1-bit `LabelBitmap`.
 ///
-/// Pipeline: grayscale -> optional scale -> auto-invert detect -> binarize.
+/// Pipeline: grayscale with alpha composited on white -> optional scale ->
+/// auto-invert detect -> binarize.
 fn convert_to_bitmap(img: DynamicImage, options: &ImageLoadOptions) -> LabelBitmap {
-    let mut gray = img.to_luma8();
+    let mut gray = if img.color().has_alpha() {
+        // Dropping alpha would treat hidden RGB as visible ink. Composite on
+        // white tape before scaling and background detection so transparent
+        // black pixels cannot erase the artwork by triggering auto-inversion.
+        let gray_alpha = img.to_luma_alpha8();
+        GrayImage::from_fn(gray_alpha.width(), gray_alpha.height(), |x, y| {
+            let [luma, alpha] = gray_alpha.get_pixel(x, y).0.map(u16::from);
+            image::Luma([((luma * alpha + 255 * (255 - alpha) + 127) / 255) as u8])
+        })
+    } else {
+        img.to_luma8()
+    };
     let (w, h) = gray.dimensions();
 
     if w == 0 || h == 0 {
