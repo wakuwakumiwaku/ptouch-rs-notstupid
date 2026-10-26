@@ -1,6 +1,6 @@
-# ptouch-rs-notstupid v0.9.2
+# ptouch-rs-notstupid v0.9.3
 
-First downloadable release of the customized fork, including its GUI designer
+Downloadable release of the customized fork, including its GUI designer
 and CLI. This is the 0.9.x fork, not upstream ptouch-rs 0.14.1.
 
 ## Changes since v0.9.0
@@ -12,10 +12,13 @@ and CLI. This is the 0.9.x fork, not upstream ptouch-rs 0.14.1.
   system families containing "Interface" from taking the place of Inter.
 - Add version-checked release builds, Linux installer metadata for this fork,
   and SHA256SUMS.
+- Build Linux assets on pinned Ubuntu 22.04 and reject GLIBC requirements above
+  2.35 before upload, instead of inheriting a newer ABI from ubuntu-latest.
 
 ## Downloads
 
 - Linux x86-64: GUI and CLI binaries, Debian/Ubuntu .deb, Fedora/RHEL .rpm.
+  Requires GLIBC 2.35 or newer and the libudev runtime.
 - Windows x86-64: GUI and CLI executables.
 - macOS Apple Silicon: GUI and CLI binaries plus the GUI .app.zip bundle.
 

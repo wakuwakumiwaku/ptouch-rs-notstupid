@@ -296,5 +296,137 @@ class AssetTests(unittest.TestCase):
         self.assertIn("release validation failed", result.stderr)
 
 
+class LinuxABITests(unittest.TestCase):
+    """Synthetic readelf metadata and mocked external-tool boundary, not real ELF tests."""
+
+    @staticmethod
+    def metadata(*versions):
+        # GNU readelf layout; names here are synthetic metadata, never build output.
+        return (
+            "Version needs section '.gnu.version_r' contains 1 entry:\n"
+            " Addr: 0x00001000  Offset: 0x001000  Link: 8 (.dynstr)\n"
+            f"  000000: Version: 1  File: libc.so.6  Cnt: {len(versions)}\n"
+            + "".join(f"  0x{i * 16:04x}:   Name: {name}  Flags: none  Version: {i + 2}\n"
+                      for i, name in enumerate(versions))
+        )
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.cli, self.gui = root / "cli", root / "gui"
+        for path in (self.cli, self.gui):
+            # Deliberately NOT valid ELF: only the magic check is exercised while
+            # readelf is explicitly mocked. Actual ELF rejection is an integration probe.
+            path.write_bytes(b"\x7fELFsynthetic external-boundary sentinel")
+
+    def result(self, *versions, stderr=""):
+        return subprocess.CompletedProcess([], 0, self.metadata(*versions), stderr)
+
+    def test_old_and_ceiling_requirements_accepted(self):
+        output = self.metadata("GLIBC_2.2.5", "GLIBC_2.34", "GLIBC_2.35")
+        self.assertEqual(release.glibc_requirements(output), {(2, 2, 5), (2, 34), (2, 35)})
+
+    def test_numeric_comparison_not_lexical_or_float(self):
+        with mock.patch.object(release.subprocess, "run", return_value=self.result("GLIBC_2.9")):
+            self.assertEqual(release.check_linux_abi(self.cli, self.gui)[str(self.cli)], "2.9")
+        self.assertLess(release.glibc_version("2.9"), release.glibc_version("2.35"))
+        self.assertGreater(release.glibc_version("2.35.1"), release.glibc_version("2.35"))
+
+    def test_both_binary_readelf_calls_are_safe_and_required(self):
+        with mock.patch.object(release.subprocess, "run",
+                               return_value=self.result("GLIBC_2.35")) as readelf:
+            self.assertEqual(release.check_linux_abi(self.cli, self.gui),
+                             {str(self.cli): "2.35", str(self.gui): "2.35"})
+        self.assertEqual(readelf.call_count, 2)
+        for call, path in zip(readelf.call_args_list, (self.cli, self.gui)):
+            self.assertEqual(call.args, (["readelf", "--version-info", "--wide", "--", str(path)],))
+            self.assertTrue(call.kwargs["check"])
+            self.assertTrue(call.kwargs["capture_output"])
+            self.assertEqual(call.kwargs["env"]["LC_ALL"], "C")
+            self.assertNotIn("shell", call.kwargs)
+
+    def test_cli_or_gui_over_ceiling_refused(self):
+        old, new = self.result("GLIBC_2.35"), self.result("GLIBC_2.43")
+        for outputs, bad in (([new], self.cli), ([old, new], self.gui)):
+            with self.subTest(binary=bad), mock.patch.object(
+                release.subprocess, "run", side_effect=outputs
+            ), self.assertRaisesRegex(release.ReleaseError, f"{bad} requires GLIBC_2.43"):
+                release.check_linux_abi(self.cli, self.gui)
+
+    def test_non_glibc_and_definition_versions_are_not_requirements(self):
+        output = (
+            "Version definition section '.gnu.version_d' contains 1 entry:\n"
+            "  0x0010:   Name: GLIBC_99.99  Flags: none  Version: 1\n"
+            + self.metadata("GLIBCXX_99.99", "CXXABI_99.99", "GLIBC_2.34")
+        )
+        self.assertEqual(release.glibc_requirements(output), {(2, 34)})
+
+    def test_missing_and_malformed_metadata_refused(self):
+        for output in ("", "not readelf output", "No version information found in this file.\n",
+                       self.metadata("GLIBCXX_3.4", "CXXABI_1.3"),
+                       self.metadata("GLIBC_2.35") * 2,
+                       self.metadata("GLIBC_2.35").replace("1 entry:", "nonsense:"),
+                       self.metadata("GLIBC_2.35").replace("Flags: none", "bad flags")):
+            with self.subTest(output=output), self.assertRaises(release.ReleaseError):
+                release.glibc_requirements(output)
+        for version in ("", "2", "2.bad", "2.35suffix", "2.35.0.1", "02.35", "PRIVATE", "ABI_DT_RELR"):
+            with self.subTest(version=version), self.assertRaises(release.ReleaseError):
+                release.glibc_requirements(self.metadata("GLIBC_2.35", "GLIBC_" + version))
+
+    def test_unknown_glibc_abi_markers_refused_with_numeric_requirement(self):
+        for marker in ("GLIBC_ABI_DT_RELR", "GLIBC_PRIVATE"):
+            with self.subTest(marker=marker):
+                output = self.metadata("GLIBC_2.35", marker)
+                with self.assertRaisesRegex(release.ReleaseError, "malformed GLIBC version"):
+                    release.glibc_requirements(output)
+                with mock.patch.object(release.subprocess, "run", return_value=
+                                       subprocess.CompletedProcess([], 0, output, "")):
+                    with self.assertRaisesRegex(release.ReleaseError, "malformed GLIBC version"):
+                        release.check_linux_abi(self.cli, self.gui)
+
+    def test_readelf_failures_and_diagnostics_refused(self):
+        for error in (FileNotFoundError("no readelf"),
+                      subprocess.CalledProcessError(1, "readelf")):
+            with self.subTest(error=error), mock.patch.object(
+                release.subprocess, "run", side_effect=error
+            ), self.assertRaises(type(error)):
+                release.check_linux_abi(self.cli, self.gui)
+        with mock.patch.object(release.subprocess, "run",
+                               return_value=self.result("GLIBC_2.35", stderr="warning")):
+            with self.assertRaisesRegex(release.ReleaseError, "diagnostics"):
+                release.check_linux_abi(self.cli, self.gui)
+        with mock.patch.object(release.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 0, "", "")):
+            with self.assertRaisesRegex(release.ReleaseError, "requirements"):
+                release.check_linux_abi(self.cli, self.gui)
+
+    def test_bad_files_refused_before_readelf(self):
+        for kind in ("missing", "empty", "nonelf", "symlink"):
+            with self.subTest(kind=kind):
+                path = self.cli.parent / kind
+                if kind == "empty":
+                    path.touch()
+                elif kind == "nonelf":
+                    path.write_bytes(b"synthetic non-ELF")
+                elif kind == "symlink":
+                    path.symlink_to(self.cli)
+                with mock.patch.object(release.subprocess, "run") as readelf:
+                    with self.assertRaises((release.ReleaseError, OSError)):
+                        release.check_linux_abi(path, self.gui)
+                    readelf.assert_not_called()
+
+    def test_public_command_enforces_both_arguments_and_refuses_bad_file(self):
+        command = [sys.executable, str(ROOT / "scripts/release.py"), "linux-abi"]
+        for args in ([], ["--cli", str(self.cli)], ["--gui", str(self.gui)]):
+            result = subprocess.run(command + args, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2)
+        self.cli.write_bytes(b"synthetic non-ELF")
+        result = subprocess.run(command + ["--cli", str(self.cli), "--gui", str(self.gui)],
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not an ELF binary", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

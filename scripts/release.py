@@ -140,6 +140,69 @@ def collect_assets(tag, artifacts, output):
         os.replace(staged, output)
 
 
+def glibc_version(value):
+    """Numeric tuples, never lexical/float comparisons (2.9 is older than 2.35)."""
+    if not re.fullmatch(r"(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){1,2}", value):
+        raise ReleaseError(f"malformed GLIBC version: {value!r}")
+    return tuple(int(part) for part in value.split("."))
+
+
+def glibc_requirements(output):
+    """Parse GNU readelf --version-info --wide *needs*, not symbol/definition names.
+
+    readelf is an external trust boundary: failed commands, diagnostics, invalid
+    ELF files and empty/unrecognized metadata must never become a passing gate.
+    """
+    versions = set()
+    in_needs = False
+    sections = 0
+    for line in output.splitlines():
+        if line.startswith("Version "):
+            in_needs = line.startswith("Version needs section ")
+            if in_needs:
+                if not re.fullmatch(
+                    r"Version needs section '[^']+' contains [1-9][0-9]* entr(?:y|ies):", line
+                ):
+                    raise ReleaseError("malformed readelf version needs header")
+                sections += 1
+            continue
+        if in_needs and "GLIBC_" in line:
+            match = re.fullmatch(
+                r"\s*(?:0x)?[0-9a-fA-F]+:\s+Name:\s+GLIBC_(\S+)"
+                r"\s+Flags:\s+[A-Za-z| ]+\s+Version:\s+[0-9]+\s*", line
+            )
+            if not match:
+                raise ReleaseError("malformed readelf GLIBC requirement")
+            versions.add(glibc_version(match[1]))
+    if sections != 1 or not versions:
+        raise ReleaseError("missing/unrecognized readelf GLIBC requirements")
+    return versions
+
+
+def check_linux_abi(cli, gui, max_glibc="2.35"):
+    """Inspect both native dynamic Linux release binaries without executing them."""
+    ceiling = glibc_version(max_glibc)
+    results = {}
+    for path in (cli, gui):
+        require_file(path)
+        with path.open("rb") as binary:
+            if binary.read(4) != b"\x7fELF":
+                raise ReleaseError(f"not an ELF binary: {path}")
+        result = subprocess.run(
+            ["readelf", "--version-info", "--wide", "--", str(path)],
+            capture_output=True, text=True, check=True,
+            env=dict(os.environ, LC_ALL="C"),
+        )
+        if result.stderr:
+            raise ReleaseError(f"readelf diagnostics for {path}: {result.stderr.strip()}")
+        required = max(glibc_requirements(result.stdout))
+        if required > ceiling:
+            version = ".".join(map(str, required))
+            raise ReleaseError(f"{path} requires GLIBC_{version}, exceeds GLIBC_{max_glibc}")
+        results[str(path)] = ".".join(map(str, required))
+    return results
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -152,9 +215,16 @@ def main(argv=None):
         subparser.add_argument("--output", type=Path, required=True)
         if command == "collect":
             subparser.add_argument("--artifacts", type=Path, required=True)
+    linux_abi = commands.add_parser("linux-abi", help="gate both Linux binaries' GLIBC requirements")
+    linux_abi.add_argument("--cli", type=Path, required=True)
+    linux_abi.add_argument("--gui", type=Path, required=True)
+    linux_abi.add_argument("--max-glibc", default="2.35")
     args = parser.parse_args(argv)
     try:
-        if args.command == "validate":
+        if args.command == "linux-abi":
+            for path, version in check_linux_abi(args.cli, args.gui, args.max_glibc).items():
+                print(f"Verified {path}: GLIBC_{version} <= GLIBC_{args.max_glibc}")
+        elif args.command == "validate":
             for key, value in validate_checkout(args.tag, args.expected_commit).items():
                 print(f"{key}={value}")
         elif args.command == "collect":

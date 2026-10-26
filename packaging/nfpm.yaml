@@ -36,7 +36,9 @@ scripts:
 overrides:
   deb:
     depends:
+      - libc6 (>= 2.35)
       - libudev1
   rpm:
     depends:
+      - glibc >= 2.35
       - systemd-libs

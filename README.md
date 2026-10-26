@@ -104,6 +104,8 @@ and macOS downloads are experimental: the hardware-testing notice above still
 applies. Packages and binaries are unsigned, so operating-system security prompts
 may appear. For standalone Linux/macOS binaries, run `chmod +x <downloaded-file>`
 before launching them; Linux installers set executable permissions automatically.
+Linux builds target GLIBC 2.35 or newer (Ubuntu 22.04 or newer) and require the
+libudev runtime. Release checks reject newer GLIBC requirements before upload.
 
 Each release includes `SHA256SUMS`. On Linux, download the checksum file beside
 an asset and verify it with `sha256sum --ignore-missing -c SHA256SUMS`. On Windows,

@@ -82,7 +82,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Build against Ubuntu 22.04's GLIBC 2.35, not a moving host ABI.
+          - os: ubuntu-22.04
             artifact_cli: ptouch
             artifact_gui: ptouch-gui
             asset_suffix: linux-amd64
@@ -127,7 +128,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libusb-1.0-0-dev libudev-dev \
+          sudo apt-get install -y binutils libusb-1.0-0-dev libudev-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev
 
@@ -136,6 +137,19 @@ jobs:
 
       - name: Build
         run: cargo build --release --workspace --locked --verbose --target ${{ matrix.target }}
+
+      - name: Gate Linux CLI and GUI GLIBC requirements
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/release.py linux-abi --max-glibc 2.35 \
+            --cli "target/${{ matrix.target }}/release/${{ matrix.artifact_cli }}" \
+            --gui "target/${{ matrix.target }}/release/${{ matrix.artifact_gui }}"
+
+      # These options exit before printer discovery; never launch the GUI here.
+      - name: Smoke test native CLI without a printer
+        run: |
+          "target/${{ matrix.target }}/release/${{ matrix.artifact_cli }}" --version
+          "target/${{ matrix.target }}/release/${{ matrix.artifact_cli }}" --help
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
