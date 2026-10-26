@@ -1,4 +1,4 @@
-# ptouch-rs-notstupid v0.9.1
+# ptouch-rs-notstupid v0.9.2
 
 First downloadable release of the customized fork, including its GUI designer
 and CLI. This is the 0.9.x fork, not upstream ptouch-rs 0.14.1.
@@ -8,6 +8,8 @@ and CLI. This is the 0.9.x fork, not upstream ptouch-rs 0.14.1.
 - Preserve exact whitespace in nonblank QR payloads.
 - Composite transparent images on white before scaling and binarization, so
   black artwork remains visible in imported images and saved layouts.
+- Prefer exact font-family names over partial matches, preventing macOS
+  system families containing "Interface" from taking the place of Inter.
 - Add version-checked release builds, Linux installer metadata for this fork,
   and SHA256SUMS.
 
