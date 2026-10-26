@@ -4,15 +4,82 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag (vX.Y.Z); builds that tag, not the selected branch"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# A manual retry and a tag push cannot publish the same tag concurrently.
+concurrency:
+  group: release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate:
+    name: Validate release identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # Validate before using untrusted dispatch input as a checkout ref.
+      - name: Validate requested tag syntax
+        id: request
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+              raise SystemExit('release tag must be strict vX.Y.Z (no leading zeros)')
+          if os.environ['GITHUB_EVENT_NAME'] == 'push' and os.environ['GITHUB_REF'] != 'refs/tags/' + tag:
+              raise SystemExit('push ref must be the requested release tag')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('tag=' + tag, file=output)
+          PY
+
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ steps.request.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate tag, workspace version and checked-out commit
+        id: identity
+        env:
+          RELEASE_TAG: ${{ steps.request.outputs.tag }}
+        run: |
+          args=()
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            args=(--expected-commit "$GITHUB_SHA")
+          fi
+          python3 scripts/release.py validate --tag "$RELEASE_TAG" "${args[@]}" >> "$GITHUB_OUTPUT"
+
+      - name: Test release validation and checksum handling
+        run: python3 -m unittest discover -s tests -p test_release.py -v
+
   build:
-    name: Build Release
+    name: Build Release (${{ matrix.target }})
+    needs: validate
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -30,9 +97,26 @@ jobs:
             artifact_gui: ptouch-gui
             asset_suffix: macos-arm64
             target: aarch64-apple-darwin
-
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Recheck immutable release identity before building
+        run: python scripts/release.py validate --tag "$RELEASE_TAG" --expected-commit "$RELEASE_COMMIT"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -44,11 +128,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libusb-1.0-0-dev libudev-dev \
-          libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-          libxkbcommon-dev libssl-dev
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev
+
+      - name: Test workspace
+        run: cargo test --workspace --locked --target ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --workspace --verbose --target ${{ matrix.target }}
+        run: cargo build --release --workspace --locked --verbose --target ${{ matrix.target }}
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
@@ -64,18 +151,15 @@ jobs:
           path: target/${{ matrix.target }}/release/${{ matrix.artifact_gui }}
           if-no-files-found: error
 
-      # macOS: assemble a .app bundle (binary + icns + Info.plist) and zip it
-      # with ditto so the bundle's structure is preserved.
       - name: Package macOS .app bundle
         if: runner.os == 'macOS'
         run: |
-          version="${GITHUB_REF_NAME#v}"
           app="ptouch-gui.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp "target/${{ matrix.target }}/release/ptouch-gui" "$app/Contents/MacOS/ptouch-gui"
           chmod +x "$app/Contents/MacOS/ptouch-gui"
           cp data/macos/ptouch-gui.icns "$app/Contents/Resources/ptouch-gui.icns"
-          sed "s/__VERSION__/${version}/g" data/macos/Info.plist > "$app/Contents/Info.plist"
+          sed "s/__VERSION__/${VERSION}/g" data/macos/Info.plist > "$app/Contents/Info.plist"
           ditto -c -k --keepParent "$app" "ptouch-gui-${{ matrix.asset_suffix }}.app.zip"
 
       - name: Upload macOS .app bundle
@@ -86,18 +170,14 @@ jobs:
           path: ptouch-gui-${{ matrix.asset_suffix }}.app.zip
           if-no-files-found: error
 
-      # Linux: build .deb and .rpm with nfpm; they install the binaries, the
-      # desktop entry, the icon, and the udev rule (postinst reloads udev).
       - name: Package .deb and .rpm
         if: runner.os == 'Linux'
         run: |
-          export VERSION="${GITHUB_REF_NAME#v}"
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           nfpm="$(go env GOPATH)/bin/nfpm"
           mkdir -p dist
           "$nfpm" package -f packaging/nfpm.yaml -p deb -t "dist/ptouch_${VERSION}_amd64.deb"
           "$nfpm" package -f packaging/nfpm.yaml -p rpm -t "dist/ptouch-${VERSION}.x86_64.rpm"
-          ls -l dist
 
       - name: Upload Linux packages
         if: runner.os == 'Linux'
@@ -108,34 +188,83 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Create Release
-    needs: build
+    name: Verify and publish Release
+    needs: [validate, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Download all artifacts
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Recheck release identity before publication
+        run: python scripts/release.py validate --tag "$RELEASE_TAG" --expected-commit "$RELEASE_COMMIT"
+
+      - name: Download all artifacts from this run
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      - name: Prepare release assets
-        run: |
-          mkdir -p release
-          cp artifacts/ptouch-linux-amd64/ptouch release/ptouch-linux-amd64
-          cp artifacts/ptouch-gui-linux-amd64/ptouch-gui release/ptouch-gui-linux-amd64
-          cp artifacts/ptouch-windows-amd64/ptouch.exe release/ptouch-windows-amd64.exe
-          cp artifacts/ptouch-gui-windows-amd64/ptouch-gui.exe release/ptouch-gui-windows-amd64.exe
-          cp artifacts/ptouch-macos-arm64/ptouch release/ptouch-macos-arm64
-          cp artifacts/ptouch-gui-macos-arm64/ptouch-gui release/ptouch-gui-macos-arm64
-          cp artifacts/ptouch-gui-macos-arm64-app/*.app.zip release/
-          cp artifacts/ptouch-linux-packages/*.deb release/
-          cp artifacts/ptouch-linux-packages/*.rpm release/
+      - name: Collect exactly nine assets and verify SHA256SUMS
+        run: python3 scripts/release.py collect --tag "$RELEASE_TAG" --artifacts artifacts --output release
 
-      - name: Create Release
+      # Refuse to overwrite an already published release. A failed draft can be
+      # retried only when it belongs to the same immutable validated commit.
+      - name: Check existing release state
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > existing-releases.json
+          python3 - <<'PY'
+          import json, os
+          with open('existing-releases.json') as source:
+              releases = [release for page in json.load(source) for release in page]
+          for release in releases:
+              if release['tag_name'] == os.environ['RELEASE_TAG']:
+                  if not release['draft']:
+                      raise SystemExit('release is already published; refusing to overwrite it')
+                  if release['target_commitish'] != os.environ['RELEASE_COMMIT']:
+                      raise SystemExit('existing draft targets a different commit; inspect it manually')
+          PY
+
+      - name: Upload verified assets to draft
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          target_commitish: ${{ needs.validate.outputs.commit }}
           files: release/*
+          body_path: RELEASE-NOTES.md
+          draft: true
+          prerelease: false
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+
+      - name: Read back draft assets and verify exact downloaded checksums
+        run: |
+          gh release download "$RELEASE_TAG" --dir published-assets
+          python3 scripts/release.py verify --tag "$RELEASE_TAG" --output published-assets
+          cmp release/SHA256SUMS published-assets/SHA256SUMS
+
+      - name: Publish complete verified draft
+        run: |
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
+          gh release view "$RELEASE_TAG" --json isDraft,tagName,targetCommitish > published-release.json
+          python3 - <<'PY'
+          import json, os
+          with open('published-release.json') as source:
+              release = json.load(source)
+          if (release['isDraft'] or release['tagName'] != os.environ['RELEASE_TAG']
+                  or release['targetCommitish'] != os.environ['RELEASE_COMMIT']):
+              raise SystemExit('published release identity verification failed')
+          PY

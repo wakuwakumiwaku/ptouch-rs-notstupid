@@ -91,6 +91,26 @@ Fast, zero-bloat Rust **GUI & CLI** for Brother P-Touch USB label printers (orig
 
 ---
 
+## Downloads
+
+Download prebuilt GUI and CLI binaries from the [latest release](https://github.com/wakuwakumiwaku/ptouch-rs-notstupid/releases/latest):
+
+- Linux x86-64: standalone binaries, Debian/Ubuntu `.deb`, and Fedora/RHEL `.rpm`.
+- Windows x86-64: GUI and CLI `.exe` files.
+- macOS Apple Silicon: standalone binaries and a GUI `.app.zip` bundle.
+
+These are builds of this customized fork, not the newer upstream release. Windows
+and macOS downloads are experimental: the hardware-testing notice above still
+applies. Packages and binaries are unsigned, so operating-system security prompts
+may appear. For standalone Linux/macOS binaries, run `chmod +x <downloaded-file>`
+before launching them; Linux installers set executable permissions automatically.
+
+Each release includes `SHA256SUMS`. On Linux, download the checksum file beside
+an asset and verify it with `sha256sum --ignore-missing -c SHA256SUMS`. On Windows,
+use `Get-FileHash <downloaded-file> -Algorithm SHA256` and compare the result with
+its entry in `SHA256SUMS`. Corresponding source is available under the release's
+Git tag and the automatically provided source archives.
+
 ## 🚀 Quick Start (Linux)
 
 ### 1. Install Dependencies & Build
