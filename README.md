@@ -198,6 +198,11 @@ ptouch info
 | `-o` | `--output <FILE>` | Save rendered label to an image file instead of printing |
 | `-w` | `--tape-width <PX>` | Printable tape height in pixels when exporting with `-o` (`76` for 12 mm, `128` for 24 mm) |
 
+For `--csv`, the first row names the layout placeholders. Header names must be
+unique (case-sensitive, without trimming); duplicates are rejected before any
+labels are produced. CSV row values override `--set` constants, including empty
+fields; constants still fill placeholders absent from the CSV.
+
 ---
 
 ## 🛡 Hardware Safety & On-Board Memory FAQ

@@ -796,8 +796,15 @@ fn print_layout_batch(
     let mut rdr = csv::Reader::from_reader(reader);
     let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
 
+    // Reject ambiguous bindings before opening a target or producing any labels.
+    let mut provided = BTreeSet::new();
+    for header in &headers {
+        if !provided.insert(header.clone()) {
+            return Err(format!("duplicate CSV column name: {header:?}").into());
+        }
+    }
+
     // Validate the placeholders against the CSV columns plus any --set keys.
-    let mut provided: BTreeSet<String> = headers.iter().cloned().collect();
     provided.extend(base.keys().cloned());
     validate_vars(&doc.placeholders(), &provided, args.allow_missing)?;
 
