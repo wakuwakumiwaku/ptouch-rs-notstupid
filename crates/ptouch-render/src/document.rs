@@ -1826,15 +1826,15 @@ mod tests {
         // second call to our QR renderer (which could repeat the same bug).
         let code = qrcode::QrCode::new(content.as_bytes()).unwrap();
         let modules = code.width() as u32;
-        let scale = 128 / (modules + 4);
-        let size = (modules + 4) * scale;
+        let scale = 128 / (modules + 8);
+        let size = (modules + 8) * scale;
         assert_eq!(bitmap.width(), size);
         assert_eq!(bitmap.height(), 128);
         let y_offset = (128 - size) / 2;
         for y in 0..modules {
             for x in 0..modules {
                 assert_eq!(
-                    bitmap.get_pixel((x + 2) * scale, y_offset + (y + 2) * scale),
+                    bitmap.get_pixel((x + 4) * scale, y_offset + (y + 4) * scale),
                     code[(x as usize, y as usize)] == qrcode::Color::Dark,
                     "module ({x}, {y})"
                 );

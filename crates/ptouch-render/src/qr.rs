@@ -15,7 +15,7 @@ use crate::{RenderError, Result};
 /// - `content`: The text, URL, Wi-Fi config, or data to encode.
 /// - `target_height`: The maximum available height in pixels (e.g. tape printable height).
 ///
-/// Returns a square `LabelBitmap` with the QR code and a standard 2-module quiet zone.
+/// Returns a square `LabelBitmap` with the QR code and a standard 4-module quiet zone.
 /// Non-blank payloads are encoded verbatim, including surrounding whitespace.
 pub fn render_qr_code(content: &str, target_height: u32) -> Result<LabelBitmap> {
     if content.trim().is_empty() {
@@ -28,8 +28,8 @@ pub fn render_qr_code(content: &str, target_height: u32) -> Result<LabelBitmap> 
         .map_err(|e| RenderError::Layout(format!("QR code generation failed: {e}")))?;
 
     let module_count = code.width() as u32;
-    // Standard quiet zone margin around the QR code matrix (2 modules)
-    let quiet_zone = 2u32;
+    // Keep four clear modules on every side, including next to other label elements.
+    let quiet_zone = 4u32;
     let total_modules = module_count + quiet_zone * 2;
 
     // Scale each module by an integer number of pixels to fit target_height
@@ -98,12 +98,12 @@ mod tests {
             let bitmap = render_qr_code(content, 128).unwrap();
             let code = qrcode::QrCode::new(content.as_bytes()).unwrap();
             let modules = code.width() as u32;
-            let scale = 128 / (modules + 4);
-            assert_eq!(bitmap.width(), (modules + 4) * scale);
+            let scale = 128 / (modules + 8);
+            assert_eq!(bitmap.width(), (modules + 8) * scale);
             for y in 0..modules {
                 for x in 0..modules {
                     assert_eq!(
-                        bitmap.get_pixel((x + 2) * scale, (y + 2) * scale),
+                        bitmap.get_pixel((x + 4) * scale, (y + 4) * scale),
                         code[(x as usize, y as usize)] == qrcode::Color::Dark,
                         "payload {content:?}, module ({x}, {y})"
                     );
