@@ -30,6 +30,15 @@ fn default_dpi() -> u16 {
     180
 }
 
+fn validate_dpi(dpi: u16) -> Result<()> {
+    if dpi == 0 {
+        return Err(RenderError::Layout(
+            "dpi must be greater than zero".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// A complete label design: global settings plus an ordered element list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LabelDocument {
@@ -37,7 +46,7 @@ pub struct LabelDocument {
     pub version: u32,
     /// Tape width in millimeters the design was created for.
     pub tape_width_mm: u8,
-    /// Print resolution in dpi the design was created for. Element sizes
+    /// Positive print resolution in dpi the design was created for. Element sizes
     /// and positions are pixels at this resolution. Layouts from before
     /// this field default to 180 dpi.
     #[serde(default = "default_dpi")]
@@ -159,7 +168,7 @@ pub struct LabelBatch {
     pub version: u32,
     /// Default tape width in millimeters for the batch.
     pub tape_width_mm: u8,
-    /// Default print resolution in DPI for the batch.
+    /// Positive default print resolution in DPI for the batch.
     #[serde(default = "default_dpi")]
     pub dpi: u16,
     /// Ordered list of batch entries.
@@ -198,8 +207,10 @@ impl LabelBatch {
                     batch.version, DOCUMENT_VERSION
                 )));
             }
+            validate_dpi(batch.dpi)?;
             for entry in &mut batch.labels {
                 entry.document.validate_version()?;
+                validate_dpi(entry.document.dpi)?;
                 entry.document.decode_image_caches()?;
             }
             return Ok(batch);
@@ -228,11 +239,12 @@ impl LabelDocument {
 
     /// Parse a document from a TOML string.
     ///
-    /// Rejects an unsupported format version and decodes every embedded image
-    /// into its render cache, so the returned document is ready to render.
+    /// Rejects an unsupported format version or zero DPI and decodes every
+    /// embedded image into its render cache, so the document is ready to render.
     pub fn from_toml_str(text: &str) -> Result<Self> {
         let mut doc: LabelDocument = toml::from_str(text)?;
         doc.validate_version()?;
+        validate_dpi(doc.dpi)?;
         doc.decode_image_caches()?;
         Ok(doc)
     }
