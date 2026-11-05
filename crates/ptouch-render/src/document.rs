@@ -199,6 +199,7 @@ impl LabelBatch {
                 )));
             }
             for entry in &mut batch.labels {
+                entry.document.validate_version()?;
                 entry.document.decode_image_caches()?;
             }
             return Ok(batch);
@@ -231,14 +232,19 @@ impl LabelDocument {
     /// into its render cache, so the returned document is ready to render.
     pub fn from_toml_str(text: &str) -> Result<Self> {
         let mut doc: LabelDocument = toml::from_str(text)?;
-        if doc.version == 0 || doc.version > DOCUMENT_VERSION {
-            return Err(RenderError::Layout(format!(
-                "unsupported layout version {} (this build supports up to {})",
-                doc.version, DOCUMENT_VERSION
-            )));
-        }
+        doc.validate_version()?;
         doc.decode_image_caches()?;
         Ok(doc)
+    }
+
+    fn validate_version(&self) -> Result<()> {
+        if self.version == 0 || self.version > DOCUMENT_VERSION {
+            return Err(RenderError::Layout(format!(
+                "unsupported layout version {} (this build supports up to {})",
+                self.version, DOCUMENT_VERSION
+            )));
+        }
+        Ok(())
     }
 
     /// Decode every image or QR element into its render cache.
