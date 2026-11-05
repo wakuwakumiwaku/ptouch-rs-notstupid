@@ -707,7 +707,7 @@ fn execute_print(args: &PrintArgs, ignored: &[String]) -> Result<(), Box<dyn std
     // Whole-label mirroring applies once, after the label is composed.
     let dpi = device.as_ref().map_or(180, |d| d.dpi());
     let bitmap = build_label(args, print_width, dpi)?.mirrored(args.flip_h, args.flip_v);
-    emit_label(&bitmap, args, max_px, device.as_mut())?;
+    emit_label(&bitmap, args, max_px, dpi, device.as_mut())?;
 
     if let Some(dev) = device {
         dev.close()?;
@@ -764,7 +764,8 @@ fn print_layout(args: &PrintArgs, layout_path: &str) -> Result<(), Box<dyn std::
 
     let (print_width, max_px, mut device) = resolve_layout_target(args, &doc)?;
     let bitmap = render_layout(&doc, print_width)?;
-    emit_label(&bitmap, args, max_px, device.as_mut())?;
+    let dpi = device.as_ref().map_or(doc.dpi, |d| d.dpi());
+    emit_label(&bitmap, args, max_px, dpi, device.as_mut())?;
 
     if let Some(dev) = device {
         dev.close()?;
@@ -934,11 +935,11 @@ fn emit_label(
     bitmap: &LabelBitmap,
     args: &PrintArgs,
     max_px: u16,
+    dpi: u16,
     device: Option<&mut CliDevice>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref output_path) = args.output {
         bitmap.save(Path::new(output_path))?;
-        let dpi = device.as_ref().map_or(180, |d| d.dpi());
         let tape_mm = bitmap.width() as f64 / f64::from(dpi) * 25.4;
         println!(
             "Saved to '{}' ({}x{} px, {:.1} mm of tape)",
