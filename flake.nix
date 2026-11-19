@@ -35,11 +35,15 @@
           version = (builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"))).workspace.package.version;
 
           # crane's filterCargoSources keeps Rust sources, TOML files and
-          # Cargo.lock, so it drops the assets ptouch-gui embeds with
-          # include_bytes!; keep anything below an assets directory.
+          # Cargo.lock, so it drops the assets ptouch-gui and ptouch-render
+          # embed with include_bytes!; keep assets/ and data/fonts/.
           cargoSrc = lib.cleanSourceWith {
             inherit src;
-            filter = path: type: craneLib.filterCargoSources path type || lib.hasInfix "/assets/" path;
+            filter =
+              path: type:
+              craneLib.filterCargoSources path type
+              || lib.hasInfix "/assets/" path
+              || lib.hasInfix "/data/fonts/" path;
           };
 
           # libusb1-sys (vendored) probes libudev with pkg-config, so the build
@@ -85,7 +89,7 @@
           '';
 
           metaCommon = {
-            homepage = "https://github.com/vowstar/ptouch-rs";
+            homepage = "https://github.com/wakuwakumiwaku/ptouch-rs-notstupid";
             license = with lib.licenses; [
               mit
               gpl3Plus

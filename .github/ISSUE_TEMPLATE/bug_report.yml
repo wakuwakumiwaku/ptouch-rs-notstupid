@@ -1,9 +1,7 @@
 name: Bug Report
 description: File a bug report
 title: "[Bug]: "
-labels: ["bug", "triage"]
-assignees:
-  - vowstar
+labels: ["bug"]
 body:
   - type: markdown
     attributes:
@@ -13,8 +11,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: What version of ptouch-rs are you running?
-      placeholder: ex. v0.1.0
+      description: What version of ptouch-rs-notstupid are you running?
+      placeholder: ex. v0.9.4
     validations:
       required: true
   - type: dropdown
@@ -73,7 +71,7 @@ body:
     id: terms
     attributes:
       label: Code of Conduct
-      description: By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/vowstar/ptouch-rs/blob/main/CODE_OF_CONDUCT.md)
+      description: By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/wakuwakumiwaku/ptouch-rs-notstupid/blob/main/CODE_OF_CONDUCT.md)
       options:
         - label: I agree to follow this project's Code of Conduct
           required: true

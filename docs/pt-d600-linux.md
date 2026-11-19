@@ -170,26 +170,23 @@ already moved past the printhead.
 
 This project provides multiple ways to handle this in `ptouch-gui` and `ptouch-cli`:
 
-1. **Auto Cut (Default)**:
-   - Prints the label and cuts once at the end.
+1. **Centered Full / Auto Cut (Default)**:
+   - Mirrors the ~24.5 mm hardware leader as a symmetrical margin (~27 mm on each side) and cuts once at the end.
    - Does **not** snip an extra waste scrap before printing (`precut = false`).
-2. **Chain Print / No Cut (Zero Waste for batches)**:
-   - In `ptouch-gui`, toggle "Auto cut" to **"Chain print (no cut)"** (or pass `--chain` in CLI).
-   - Subsequent labels print back-to-back with **0 mm wasted tape** between them.
-   - When finished with your batch, click **"Feed & Cut"** in the toolbar.
+2. **Chain Print (Continuous, zero waste between labels)**:
+   - In `ptouch-gui`, select **Chain Print (Continuous)** in the sidebar (or pass `--chain` in the CLI).
+   - Subsequent labels print back-to-back with no cut between them.
+   - When finished, click **Feed & Cut** in the toolbar.
 3. **Multi-Copy Batching**:
-   - Set **Copies** (in GUI or `-n` in CLI). All intermediate copies are automatically
-     chained with zero waste between them, cutting only after the final copy.
-4. **Trim Leader (Pre-cut)**:
-   - Enable "Trim leader scrap (pre-cut)" in GUI (or `--precut` in CLI).
-   - The printer will snip off the 25 mm leader before printing for symmetrical margins.
-5. **Smart Automatic Pre-Trimming & Mixed Batches**:
-   - In `ptouch-gui`, if label elements extend into the left prehead margin zone, the editor automatically detects and enables pre-trimming.
-   - Batch queues seamlessly support mixed batches containing both standard zero-waste chain labels and pre-trimmed labels.
-6. **Label Length Confinement & "Fit Largest Possible Font"**:
+   - Set **Copies** (in the GUI or `--copies <N>` in the CLI). All intermediate copies are automatically chained with zero waste between them, cutting only after the final copy.
+4. **Compact Margins / Pre-trim**:
+   - Pick **3mm** or **5mm** (or any margin `< 24.5 mm`) in the GUI, or pass `--precut` in the CLI.
+   - The printer snips off the ~24.5 mm leader scrap before printing so the finished label has compact margins.
+   - Batch queues support mixing centered (`0 mm` scrap) and pre-trimmed labels in the same run.
+5. **Label Length Confinement & Fit Largest Font**:
    - Set a maximum finished label length (e.g. `100 mm`) in `ptouch-gui` (`Auto | 50mm | 75mm | 100mm | 150mm` or custom `mm`) or via `-L` / `--max-length 100` in `ptouch-cli`.
-   - With **"🔠 Fit largest possible font in confined area"** enabled (default), the renderer measures actual glyph ink pixels and binary-searches the largest font size (including balanced 2-line and 3-line word wrapping for long single-line strings) that fills the confined box.
-   - Automatically switches to a compact `3.0 mm` pre-trim margin when maximizing font inside a confined area so `94 mm` of a `100 mm` label is available for content instead of losing `54 mm` to `27 mm` leader margins. Shorter labels keep their natural length without blank padding.
+   - With **Fit largest possible font in confined area** enabled, the renderer measures actual glyph ink pixels and binary-searches the largest font size (including balanced 2-line and 3-line word wrapping for long single-line strings) that fits the confined box.
+   - Automatically switches to a compact `3.0 mm` pre-trim margin when maximizing font inside a confined area without an explicit margin, so `94 mm` of a `100 mm` label goes to content instead of losing `54 mm` to `27 mm` leader margins. Shorter labels keep their natural length without blank padding.
 
 ## Reliability changes in this fork
 
@@ -198,10 +195,13 @@ This project provides multiple ways to handle this in `ptouch-gui` and `ptouch-c
 - Refuse another job on a failed USB session until it is explicitly
   reinitialized. The existing best-effort behavior for a printer that sends
   no completion reply is retained; silence is not proof that a label printed.
-- Category 3 hardware safety protection: canvas and controls are safely locked and dimmed out until the printer is connected and powered on.
-- Emergency print cancellation button (`Cancel Print`) and live worker status indicators.
-- Synchronized multi-label batch cutting to prevent buffer desync and cutter stalling.
-- Pure-Rust 1-bit integer module QR code generation with quiet zones, scannable with zero thermal printhead subpixel blur.
+- Print and feed/cut controls stay disabled until a printer is detected online,
+  while offline label design and image export remain usable.
+- Mid-job cancellation (`Cancel` / `Cancel Batch`) and live worker status feedback.
+- Synchronized multi-label batch cutting with post-cut pacing to prevent buffer
+  desync and cutter stalling on the PT-D600.
+- Pure-Rust 1-bit integer-scaled QR code generation with 4-module quiet zones,
+  keeping thermal printhead output sharp without anti-aliasing blur.
 - Composite transparent image pixels on white tape before scaling, background
   detection and binarization. Black artwork on transparent PNG backgrounds stays
   visible in image imports and embedded layouts; opaque-image auto-inversion is

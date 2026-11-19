@@ -23,3 +23,7 @@ target
 .cursor
 .tasks
 .vscode
+
+# Python bytecode from release test suite
+__pycache__/
+*.py[cod]
