@@ -44,10 +44,15 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
     if std::env::var("PTOUCH_SCREENSHOT").is_ok() {
+        let (w, h) = match std::env::var("PTOUCH_VIEW").as_deref() {
+            Ok("generator") | Ok("setup") => (1160.0, 660.0),
+            Ok("batch") => (1360.0, 780.0),
+            _ => (1380.0, 640.0),
+        };
         viewport = viewport
-            .with_inner_size([1600.0, 900.0])
-            .with_min_inner_size([1600.0, 900.0])
-            .with_max_inner_size([1600.0, 900.0])
+            .with_inner_size([w, h])
+            .with_min_inner_size([w, h])
+            .with_max_inner_size([w, h])
             .with_resizable(false);
     }
 

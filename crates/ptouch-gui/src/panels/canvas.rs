@@ -546,10 +546,10 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             // Calculate zoom (leave enough side margin for the left tape-width callout & right cut badge)
             let zoom = if state.zoom_fit {
-                let margin_x = 130.0;
-                let margin_y = 110.0;
+                let margin_x = 76.0;
+                let margin_y = 84.0;
                 let zoom_x = (canvas_size.x - margin_x) / total_strip_w_px.max(1.0);
-                let zoom_y = (canvas_size.y - margin_y) / (tape_physical_h_px + 50.0).max(1.0);
+                let zoom_y = (canvas_size.y - margin_y) / (tape_physical_h_px + 40.0).max(1.0);
                 let fit_zoom = zoom_x.min(zoom_y).clamp(0.05, 10.0);
                 state.zoom = fit_zoom;
                 fit_zoom
@@ -560,8 +560,8 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             let display_strip_w = total_strip_w_px * zoom;
             let display_tape_h = tape_physical_h_px * zoom;
 
-            // Center the entire printed tape in the canvas
-            let center = canvas_rect.center();
+            // Center the entire printed tape in the canvas (shifted slightly right for left "24 mm" label)
+            let center = canvas_rect.center() + egui::vec2(10.0, 4.0);
             let tape_rect =
                 egui::Rect::from_center_size(center, egui::vec2(display_strip_w, display_tape_h));
 

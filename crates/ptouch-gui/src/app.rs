@@ -101,6 +101,14 @@ impl PtouchApp {
             app.state.ensure_batch_initialized();
             app.state.set_max_length_mm(Some(max_len));
         }
+        if std::env::var("PTOUCH_SCREENSHOT").is_ok() {
+            let zoom = match std::env::var("PTOUCH_VIEW").as_deref() {
+                Ok("generator") | Ok("setup") => 1.35,
+                Ok("batch") => 1.22,
+                _ => 1.15,
+            };
+            cc.egui_ctx.set_zoom_factor(zoom);
+        }
         app
     }
 
