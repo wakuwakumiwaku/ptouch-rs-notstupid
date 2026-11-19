@@ -3,7 +3,8 @@
 
 //! Central canvas panel for label preview display, full tape geometry, and cut indicators.
 
-use crate::state::{AppState, CutMarginMode};
+use crate::state::{AppState, CutMarginMode, format_tape_width_mm};
+use crate::widgets;
 
 /// Render the central preview canvas.
 pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
@@ -13,7 +14,6 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
         180.0
     };
     let px_per_mm = dpi / 25.4;
-    let copies = state.copies.max(1);
 
     state.ensure_batch_initialized();
 
@@ -33,7 +33,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(
             egui::RichText::new("📋 Project Batch:")
                 .strong()
-                .color(egui::Color32::from_rgb(30, 64, 175)),
+                .color(widgets::accent_blue(ui)),
         );
 
         let total_items = state.batch_items.len();
@@ -64,7 +64,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             ui.label(
                 egui::RichText::new("NUMBER TO PRINT:")
                     .strong()
-                    .color(egui::Color32::from_rgb(20, 30, 45)),
+                    .color(ui.visuals().strong_text_color()),
             );
             if ui.button("➖").clicked() {
                 state.batch_items[cur_idx].copies =
@@ -80,7 +80,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                     state.batch_items[cur_idx].copies.saturating_add(1);
             }
             ui.label("copies");
-            state.copies = state.batch_items[cur_idx].copies.max(1);
+            state.copies = state.batch_items[cur_idx].copies;
         }
 
         ui.separator();
@@ -103,13 +103,16 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             .button(
                 egui::RichText::new(format!("📋 View All ({total_items}) Labels & Print All"))
                     .strong()
-                    .color(egui::Color32::from_rgb(22, 101, 52)),
+                    .color(widgets::accent_green(ui)),
             )
             .clicked()
         {
+            state.sync_active_to_batch();
             state.view_mode = crate::state::ViewMode::Batch;
         }
     });
+
+    let copies = state.copies.max(1);
 
     ui.add_space(4.0);
     ui.separator();
@@ -117,12 +120,6 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
     // Quick text editor and zoom controls
     ui.horizontal_wrapped(|ui| {
-        ui.label(
-            egui::RichText::new("✏ Text:")
-                .strong()
-                .color(egui::Color32::from_rgb(30, 41, 59)),
-        );
-
         let selected_qr_idx = match state.selected_element {
             Some(idx)
                 if idx < state.elements.len()
@@ -153,7 +150,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             ui.label(
                 egui::RichText::new("📱 QR:")
                     .strong()
-                    .color(egui::Color32::from_rgb(30, 41, 59)),
+                    .color(ui.visuals().strong_text_color()),
             );
             if let crate::state::LabelElement::QrCode {
                 ref mut content,
@@ -185,19 +182,33 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         idx + 1,
                         state.elements.len()
                     ))
-                    .color(egui::Color32::from_rgb(100, 110, 120)),
+                    .color(ui.visuals().weak_text_color()),
                 );
             }
         } else if let Some(idx) = target_text_idx {
+            ui.label(
+                egui::RichText::new("✏ Text:")
+                    .strong()
+                    .color(ui.visuals().strong_text_color()),
+            );
             if let crate::state::LabelElement::Text {
                 ref mut content, ..
             } = state.elements[idx]
             {
-                let resp = ui.add(
-                    egui::TextEdit::singleline(content)
-                        .desired_width(240.0)
-                        .hint_text("Type label text here..."),
-                );
+                let resp = if content.contains('\n') {
+                    ui.add(
+                        egui::TextEdit::multiline(content)
+                            .desired_width(240.0)
+                            .desired_rows(1)
+                            .hint_text("Type label text here..."),
+                    )
+                } else {
+                    ui.add(
+                        egui::TextEdit::singleline(content)
+                            .desired_width(240.0)
+                            .hint_text("Type label text here..."),
+                    )
+                };
                 if state.request_text_focus {
                     resp.request_focus();
                     state.request_text_focus = false;
@@ -214,7 +225,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         idx + 1,
                         state.elements.len()
                     ))
-                    .color(egui::Color32::from_rgb(100, 110, 120)),
+                    .color(ui.visuals().weak_text_color()),
                 );
             }
         } else {
@@ -273,7 +284,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(
             egui::RichText::new("📏 Margin:")
                 .strong()
-                .color(egui::Color32::from_rgb(147, 197, 253)),
+                .color(widgets::accent_blue(ui)),
         );
 
         let is_pretrim = state.is_pretrim();
@@ -347,7 +358,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(
             egui::RichText::new("📐 Max Length:")
                 .strong()
-                .color(egui::Color32::from_rgb(147, 197, 253)),
+                .color(widgets::accent_blue(ui)),
         );
 
         let is_auto_len = state.max_length_mm.is_none();
@@ -426,7 +437,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 ui.separator();
                 ui.label(
                     egui::RichText::new("✂ Cuts: 0 (Continuous Chain • No Cut)")
-                        .color(egui::Color32::from_rgb(0, 160, 90)),
+                        .color(widgets::accent_green(ui)),
                 );
             } else if is_pretrim {
                 let finished_label_mm = content_mm + (margin_mm * 2.0 * copies as f32);
@@ -440,7 +451,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 ui.separator();
                 ui.label(
                     egui::RichText::new("✂ Cuts: 2 (Pretrim Cut + Final Cut)")
-                        .color(egui::Color32::from_rgb(230, 50, 50)),
+                        .color(widgets::accent_red(ui)),
                 );
             } else {
                 let total_tape_mm = margin_mm + content_mm + margin_mm;
@@ -454,7 +465,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 ui.separator();
                 ui.label(
                     egui::RichText::new("✂ Cuts: 1 (Final Cut • Same Blank Space Both Sides • 0 Scrap)")
-                        .color(egui::Color32::from_rgb(40, 100, 200)),
+                        .color(widgets::accent_blue(ui)),
                 );
             }
 
@@ -466,7 +477,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         max_len
                     ))
                     .strong()
-                    .color(egui::Color32::from_rgb(96, 165, 250)),
+                    .color(widgets::accent_blue(ui)),
                 );
             }
         }
@@ -533,9 +544,9 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 margin_px + (content_w_px * copies as f32) + margin_px
             };
 
-            // Calculate zoom
+            // Calculate zoom (leave enough side margin for the left tape-width callout & right cut badge)
             let zoom = if state.zoom_fit {
-                let margin_x = 80.0;
+                let margin_x = 130.0;
                 let margin_y = 110.0;
                 let zoom_x = (canvas_size.x - margin_x) / total_strip_w_px.max(1.0);
                 let zoom_y = (canvas_size.y - margin_y) / (tape_physical_h_px + 50.0).max(1.0);
@@ -651,10 +662,15 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                     egui::pos2(cur_x + lead_w, y_bottom),
                 );
                 painter.rect_filled(scrap_rect, 0.0, egui::Color32::from_rgb(255, 235, 235));
+                let scrap_label = if scrap_rect.width() >= 155.0 {
+                    "✂ Pre-trim Scrap (24.5 mm)"
+                } else {
+                    "✂ Scrap (24.5mm)"
+                };
                 painter.text(
                     scrap_rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    "✂ Pre-trim Scrap (24.5 mm)",
+                    scrap_label,
                     egui::FontId::proportional(11.0),
                     egui::Color32::from_rgb(190, 40, 40),
                 );
@@ -805,7 +821,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             painter.text(
                 egui::pos2(tape_rect.min.x - 10.0, tape_rect.center().y),
                 egui::Align2::RIGHT_CENTER,
-                format!("{} mm", state.tape_width_mm),
+                format_tape_width_mm(state.tape_width_mm),
                 egui::FontId::proportional(11.0),
                 egui::Color32::from_rgb(60, 75, 95),
             );
@@ -957,7 +973,7 @@ fn draw_no_cut_marker(painter: &egui::Painter, x: f32, y_top: f32, y_bottom: f32
 fn draw_continuous_indicator(painter: &egui::Painter, x: f32, y_top: f32, y_bottom: f32) {
     let color = egui::Color32::from_rgb(0, 160, 90); // Green
     let font_id = egui::FontId::proportional(11.0);
-    let label = "➔ CONTINUOUS (NO CUT)";
+    let label = "CONTINUOUS (NO CUT)";
 
     let stroke = egui::Stroke::new(2.0, color);
     draw_dashed_v_line(painter, x, y_top - 16.0, y_bottom + 16.0, stroke, 4.0, 3.0);

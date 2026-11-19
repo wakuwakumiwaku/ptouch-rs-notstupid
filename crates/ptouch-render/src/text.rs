@@ -110,7 +110,7 @@ impl TextRenderer {
         let line_height = (font_size * 1.2).ceil();
         let metrics = Metrics::new(font_size, line_height);
 
-        let resolved = crate::font::find_font(font_name);
+        let resolved = crate::font::find_font_in_db(self.font_system.db(), font_name);
         let effective_name = resolved.as_deref().unwrap_or(font_name);
         let family = if effective_name.is_empty() {
             Family::SansSerif
@@ -234,6 +234,9 @@ impl TextRenderer {
             }
         }
 
+        let resolved = crate::font::find_font_in_db(self.font_system.db(), font_name);
+        let effective_name = resolved.as_deref().unwrap_or(font_name).to_string();
+
         let mut best_candidate = text;
         let mut best_font_size = 2.0_f32;
 
@@ -248,7 +251,7 @@ impl TextRenderer {
             for _ in 0..13 {
                 let mid = (low + high) * 0.5;
                 if let Some((min_x, max_x, min_y, max_y)) =
-                    self.measure_ink_bbox(&cand, mid, line_factor, font_name, align)
+                    self.measure_ink_bbox(&cand, mid, line_factor, &effective_name, align)
                 {
                     let ink_w = (max_x - min_x).max(1) as u32;
                     let ink_h = (max_y - min_y).max(1) as u32;
@@ -280,7 +283,7 @@ impl TextRenderer {
             best_font_size,
             line_factor,
             print_width,
-            font_name,
+            &effective_name,
             align,
         )
     }
@@ -292,14 +295,12 @@ impl TextRenderer {
         text: &str,
         font_size: f32,
         line_factor: f32,
-        font_name: &str,
+        effective_name: &str,
         align: TextAlign,
     ) -> Option<(i32, i32, i32, i32)> {
         let line_height = (font_size * line_factor).ceil().max(1.0);
         let metrics = Metrics::new(font_size.max(1.0), line_height);
 
-        let resolved = crate::font::find_font(font_name);
-        let effective_name = resolved.as_deref().unwrap_or(font_name);
         let family = if effective_name.is_empty() {
             Family::SansSerif
         } else {
@@ -347,14 +348,12 @@ impl TextRenderer {
         font_size: f32,
         line_factor: f32,
         print_width: u32,
-        font_name: &str,
+        effective_name: &str,
         align: TextAlign,
     ) -> Result<LabelBitmap> {
         let line_height = (font_size * line_factor).ceil().max(1.0);
         let metrics = Metrics::new(font_size.max(1.0), line_height);
 
-        let resolved = crate::font::find_font(font_name);
-        let effective_name = resolved.as_deref().unwrap_or(font_name);
         let family = if effective_name.is_empty() {
             Family::SansSerif
         } else {
@@ -430,15 +429,14 @@ fn split_balanced_n_lines(s: &str, n: usize) -> String {
     if words.len() < n || n <= 1 {
         return s.to_string();
     }
-    let total_len: usize = words.iter().map(|w| w.len()).sum::<usize>() + words.len() - 1;
+    let word_lens: Vec<usize> = words.iter().map(|w| w.chars().count()).collect();
     let mut lines = Vec::with_capacity(n);
     let mut start_idx = 0;
 
     for line_idx in 0..(n - 1) {
         let remaining_lines = n - line_idx;
-        let remaining_words = &words[start_idx..];
-        let rem_len: usize = remaining_words.iter().map(|w| w.len()).sum::<usize>()
-            + remaining_words.len().saturating_sub(1);
+        let rem_lens = &word_lens[start_idx..];
+        let rem_len: usize = rem_lens.iter().sum::<usize>() + rem_lens.len().saturating_sub(1);
         let target_len = rem_len / remaining_lines;
 
         let mut best_end = start_idx + 1;
@@ -447,7 +445,7 @@ fn split_balanced_n_lines(s: &str, n: usize) -> String {
         let max_end = words.len() - (remaining_lines - 1);
 
         for end in (start_idx + 1)..=max_end {
-            let w_len = words[end - 1].len();
+            let w_len = word_lens[end - 1];
             acc_len += if end == start_idx + 1 {
                 w_len
             } else {
@@ -464,7 +462,6 @@ fn split_balanced_n_lines(s: &str, n: usize) -> String {
         lines.push(words[start_idx..best_end].join(" "));
         start_idx = best_end;
     }
-    let _ = total_len;
     lines.push(words[start_idx..].join(" "));
     lines.join("\n")
 }
@@ -472,6 +469,32 @@ fn split_balanced_n_lines(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_split_balanced_uses_char_counts() {
+        // Each word has 3 chars, even though "ÄÖÜ" is 6 UTF-8 bytes.
+        let split = split_balanced_n_lines("ÄÖÜ abc def ghi", 2);
+        assert_eq!(split, "ÄÖÜ abc\ndef ghi");
+    }
+
+    #[test]
+    fn test_render_text_fit_box_respects_bounds() {
+        let mut renderer = TextRenderer::new();
+        let bmp = renderer
+            .render_text_fit_box(
+                &["WARNING HIGH VOLTAGE 230V AC"],
+                76,
+                Some(300),
+                "Inter",
+                0,
+                TextAlign::Center,
+                true,
+            )
+            .unwrap();
+        assert_eq!(bmp.height(), 76);
+        assert!(bmp.width() <= 300, "width {} exceeded 300", bmp.width());
+        assert!(bmp.width() > 0);
+    }
 
     #[test]
     fn test_text_align_conversion() {

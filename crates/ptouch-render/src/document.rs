@@ -209,8 +209,7 @@ impl LabelBatch {
             }
             validate_dpi(batch.dpi)?;
             for entry in &mut batch.labels {
-                entry.document.validate_version()?;
-                validate_dpi(entry.document.dpi)?;
+                entry.document.validate()?;
                 entry.document.decode_image_caches()?;
             }
             return Ok(batch);
@@ -239,22 +238,37 @@ impl LabelDocument {
 
     /// Parse a document from a TOML string.
     ///
-    /// Rejects an unsupported format version or zero DPI and decodes every
-    /// embedded image into its render cache, so the document is ready to render.
+    /// Rejects an unsupported format version, zero DPI, or invalid length/margin
+    /// values and decodes every embedded image into its render cache, so the
+    /// document is ready to render.
     pub fn from_toml_str(text: &str) -> Result<Self> {
         let mut doc: LabelDocument = toml::from_str(text)?;
-        doc.validate_version()?;
-        validate_dpi(doc.dpi)?;
+        doc.validate()?;
         doc.decode_image_caches()?;
         Ok(doc)
     }
 
-    fn validate_version(&self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         if self.version == 0 || self.version > DOCUMENT_VERSION {
             return Err(RenderError::Layout(format!(
                 "unsupported layout version {} (this build supports up to {})",
                 self.version, DOCUMENT_VERSION
             )));
+        }
+        validate_dpi(self.dpi)?;
+        if let Some(margin) = self.margin_mm
+            && (!margin.is_finite() || margin < 0.0)
+        {
+            return Err(RenderError::Layout(
+                "margin_mm must be finite and non-negative".to_string(),
+            ));
+        }
+        if let Some(max_len) = self.max_length_mm
+            && (!max_len.is_finite() || max_len <= 0.0)
+        {
+            return Err(RenderError::Layout(
+                "max_length_mm must be finite and greater than zero".to_string(),
+            ));
         }
         Ok(())
     }
@@ -1890,5 +1904,54 @@ mod tests {
         } else {
             panic!("Expected QrCode element");
         }
+    }
+
+    #[test]
+    fn test_invalid_margin_and_max_length_are_rejected() {
+        for bad_line in [
+            "margin_mm = -1.0",
+            "margin_mm = nan",
+            "margin_mm = inf",
+            "max_length_mm = 0.0",
+            "max_length_mm = -50.0",
+            "max_length_mm = nan",
+            "max_length_mm = inf",
+        ] {
+            let toml_text = format!(
+                "version = 1\ntape_width_mm = 12\nfont_name = \"Inter\"\nfont_margin = 0\n\
+                 {bad_line}\n[[elements]]\ntype = \"padding\"\npixels = 8\n"
+            );
+            assert!(
+                LabelDocument::from_toml_str(&toml_text).is_err(),
+                "expected error for {bad_line}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_embedded_svg_round_trip() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+            <rect x="10" y="10" width="20" height="20" fill="black"/>
+        </svg>"#;
+        let mut doc = text_doc("");
+        doc.elements = vec![LabelElement::image_from_bytes(
+            Some("icon.svg".into()),
+            svg.to_vec(),
+        )];
+        assert!(matches!(
+            doc.elements[0],
+            LabelElement::Image {
+                bitmap: Some(_),
+                ..
+            }
+        ));
+        let parsed = LabelDocument::from_toml_str(&doc.to_toml_string().unwrap()).unwrap();
+        assert!(matches!(
+            parsed.elements[0],
+            LabelElement::Image {
+                bitmap: Some(_),
+                ..
+            }
+        ));
     }
 }

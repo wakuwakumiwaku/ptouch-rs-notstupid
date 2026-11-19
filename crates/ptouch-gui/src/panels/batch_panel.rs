@@ -8,7 +8,8 @@
 
 use eframe::egui;
 
-use crate::state::{AppState, ViewMode};
+use crate::state::{AppState, ViewMode, format_tape_width_mm};
+use crate::widgets;
 
 /// Render the All Labels Batch Overview in the central panel.
 pub fn show_batch_panel(
@@ -24,7 +25,12 @@ pub fn show_batch_panel(
 
     let total_labels = state.batch_items.len();
     let total_prints = state.total_batch_prints();
-    let px_per_mm = state.printer_dpi as f32 / 25.4;
+    let dpi = if state.printer_dpi > 0 {
+        state.printer_dpi as f32
+    } else {
+        180.0
+    };
+    let px_per_mm = dpi / 25.4;
 
     // Estimate total tape length for the entire batch
     let mut total_batch_mm = 0.0f32;
@@ -60,9 +66,16 @@ pub fn show_batch_panel(
         }
     }
 
+    let dark_mode = ui.visuals().dark_mode;
+    let banner_fill = if dark_mode {
+        egui::Color32::from_rgb(30, 35, 44)
+    } else {
+        egui::Color32::from_rgb(248, 250, 252)
+    };
+
     // Top control banner
     egui::Frame::canvas(ui.style())
-        .fill(egui::Color32::from_rgb(248, 250, 252))
+        .fill(banner_fill)
         .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -80,7 +93,7 @@ pub fn show_batch_panel(
                 if ui
                     .button(
                         egui::RichText::new("➕ Add New Label")
-                            .color(egui::Color32::from_rgb(20, 110, 40)),
+                            .color(widgets::accent_green(ui)),
                     )
                     .clicked()
                 {
@@ -91,7 +104,7 @@ pub fn show_batch_panel(
                 if ui
                     .button(
                         egui::RichText::new("⚡ Quick Generate (Series / List)...")
-                            .color(egui::Color32::from_rgb(30, 90, 180)),
+                            .color(widgets::accent_blue(ui)),
                     )
                     .clicked()
                 {
@@ -141,7 +154,7 @@ pub fn show_batch_panel(
                         total_batch_mm / 10.0
                     ))
                     .strong()
-                    .color(egui::Color32::from_rgb(50, 70, 90)),
+                    .color(ui.visuals().strong_text_color()),
                 );
 
                 // Cancel batch button when busy
@@ -149,7 +162,7 @@ pub fn show_batch_panel(
                     && ui
                         .button(
                             egui::RichText::new("⏹ Cancel Batch")
-                                .color(egui::Color32::from_rgb(220, 38, 38))
+                                .color(widgets::accent_red(ui))
                                 .strong(),
                         )
                         .on_hover_text("Abort remaining labels in the batch immediately")
@@ -242,18 +255,23 @@ pub fn show_batch_panel(
             let active_idx = state.active_batch_index;
             let default_tape_px = state.tape_width_px;
 
+            let is_chain_mode = state.cut_mode == crate::state::CutMarginMode::ChainPrint;
+
             for (idx, item) in state.batch_items.iter_mut().enumerate() {
                 let is_active = idx == active_idx;
-                let bg_color = if is_active {
-                    egui::Color32::from_rgb(240, 246, 255) // light blue highlight
-                } else {
-                    egui::Color32::from_rgb(255, 255, 255)
+                let bg_color = match (dark_mode, is_active) {
+                    (true, true) => egui::Color32::from_rgb(33, 44, 64),
+                    (true, false) => egui::Color32::from_rgb(30, 34, 42),
+                    (false, true) => egui::Color32::from_rgb(240, 246, 255),
+                    (false, false) => egui::Color32::from_rgb(255, 255, 255),
                 };
 
-                let border_stroke = if is_active {
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(59, 130, 246))
-                } else {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 215, 225))
+                let border_stroke = match (dark_mode, is_active) {
+                    (_, true) => egui::Stroke::new(2.0, egui::Color32::from_rgb(59, 130, 246)),
+                    (true, false) => egui::Stroke::new(1.0, egui::Color32::from_rgb(65, 74, 90)),
+                    (false, false) => {
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 215, 225))
+                    }
                 };
 
                 egui::Frame::new()
@@ -269,7 +287,7 @@ pub fn show_batch_panel(
                                 egui::RichText::new(badge_text)
                                     .strong()
                                     .size(14.0)
-                                    .color(egui::Color32::from_rgb(30, 64, 175)),
+                                    .color(widgets::accent_blue(ui)),
                             );
 
                             if let Some(ptouch_render::document::LabelElement::Text {
@@ -277,12 +295,22 @@ pub fn show_batch_panel(
                                 ..
                             }) = item.document.elements.iter_mut().find(|el| matches!(el, ptouch_render::document::LabelElement::Text { .. }))
                             {
-                                let resp = ui.add(
-                                    egui::TextEdit::singleline(content)
-                                        .desired_width(240.0)
-                                        .font(egui::TextStyle::Heading)
-                                        .hint_text("Label text..."),
-                                );
+                                let resp = if content.contains('\n') {
+                                    ui.add(
+                                        egui::TextEdit::multiline(content)
+                                            .desired_width(240.0)
+                                            .desired_rows(1)
+                                            .font(egui::TextStyle::Heading)
+                                            .hint_text("Label text..."),
+                                    )
+                                } else {
+                                    ui.add(
+                                        egui::TextEdit::singleline(content)
+                                            .desired_width(240.0)
+                                            .font(egui::TextStyle::Heading)
+                                            .hint_text("Label text..."),
+                                    )
+                                };
                                 if resp.changed() {
                                     item.title = content
                                         .lines()
@@ -300,7 +328,7 @@ pub fn show_batch_panel(
                                     ui.label(
                                         egui::RichText::new("📱+📝")
                                             .small()
-                                            .color(egui::Color32::from_rgb(100, 116, 139)),
+                                            .color(ui.visuals().weak_text_color()),
                                     ).on_hover_text("This label contains both text and QR code");
                                 }
                             } else if let Some(ptouch_render::document::LabelElement::QrCode {
@@ -318,7 +346,7 @@ pub fn show_batch_panel(
                                         .hint_text("https://... or text"),
                                 );
                                 if resp.changed() {
-                                    let h = target_height.unwrap_or(item.document.tape_width_mm as u32 * 8);
+                                    let h = target_height.unwrap_or(default_tape_px);
                                     *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
                                     item.title = format!("QR: {}", content.trim());
                                     item.dirty = true;
@@ -372,7 +400,7 @@ pub fn show_batch_panel(
                                 ui.label(
                                     egui::RichText::new("(Currently in Designer)")
                                         .small()
-                                        .color(egui::Color32::from_rgb(59, 130, 246)),
+                                        .color(widgets::accent_blue(ui)),
                                 );
                             }
 
@@ -413,7 +441,7 @@ pub fn show_batch_panel(
                                 .unwrap_or(default_tape_px);
 
                             let mm_w = label_px_w as f32 / px_per_mm;
-                            let mm_h = item.document.tape_width_mm as f32;
+                            let tape_label = format_tape_width_mm(item.document.tape_width_mm);
 
                             ui.vertical(|ui| {
                                 ui.set_min_width(320.0);
@@ -421,7 +449,7 @@ pub fn show_batch_panel(
                                     egui::RichText::new("Label Preview (Exact Tape Print):")
                                         .small()
                                         .strong()
-                                        .color(egui::Color32::from_rgb(70, 80, 95)),
+                                        .color(ui.visuals().weak_text_color()),
                                 );
 
                                 ui.add_space(4.0);
@@ -429,7 +457,7 @@ pub fn show_batch_panel(
                                 // White tape preview container
                                 let preview_frame_resp = egui::Frame::new()
                                     .fill(egui::Color32::WHITE)
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 185, 195)))
+                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(160, 170, 185)))
                                     .corner_radius(4.0)
                                     .inner_margin(egui::Margin::symmetric(10, 8))
                                     .show(ui, |ui| {
@@ -471,19 +499,19 @@ pub fn show_batch_panel(
                                 let total_finished_mm = mm_w + cur_margin * 2.0;
                                 let dim_str = if let Some(max_len) = item.document.max_length_mm {
                                     format!(
-                                        "Content: {:.1} mm × {:.1} mm  •  Total: {:.1} mm (≤ {:.0} mm)  •  Tape: {} mm  •  Font: {}",
-                                        mm_w, mm_h, total_finished_mm, max_len, item.document.tape_width_mm, item.document.font_name
+                                        "Content: {:.1} mm × {}  •  Total: {:.1} mm (≤ {:.0} mm)  •  Font: {}",
+                                        mm_w, tape_label, total_finished_mm, max_len, item.document.font_name
                                     )
                                 } else {
                                     format!(
-                                        "Content: {:.1} mm × {:.1} mm  •  Total: {:.1} mm  •  Tape: {} mm  •  Font: {}",
-                                        mm_w, mm_h, total_finished_mm, item.document.tape_width_mm, item.document.font_name
+                                        "Content: {:.1} mm × {}  •  Total: {:.1} mm  •  Font: {}",
+                                        mm_w, tape_label, total_finished_mm, item.document.font_name
                                     )
                                 };
                                 ui.label(
                                     egui::RichText::new(dim_str)
                                         .size(10.5)
-                                        .color(egui::Color32::from_rgb(110, 115, 125)),
+                                        .color(ui.visuals().weak_text_color()),
                                 );
 
                                 ui.add_space(4.0);
@@ -495,29 +523,36 @@ pub fn show_batch_panel(
                                             egui::RichText::new(format!("✂ Auto Pre-trim ({:.1} mm • 24.5 mm scrap)", cur_margin))
                                                 .small()
                                                 .strong()
-                                                .color(egui::Color32::from_rgb(194, 65, 12)),
+                                                .color(widgets::accent_amber(ui)),
                                         ).on_hover_text("Margin < 24.5 mm. Printer will pre-trim the 24.5 mm scrap snippet.");
                                     } else {
                                         ui.label(
                                             egui::RichText::new(format!("📏 Centered Lead ({:.1} mm • 0 mm scrap)", cur_margin))
                                                 .small()
                                                 .strong()
-                                                .color(egui::Color32::from_rgb(22, 101, 52)),
+                                                .color(widgets::accent_green(ui)),
                                         ).on_hover_text("Margin ≥ 24.5 mm. Uses printer's natural hardware lead. Zero scrap snippet!");
                                     }
 
                                     ui.separator();
 
-                                    let is_cent = item.document.margin_mm.is_none() || item.document.margin_mm == Some(27.0);
+                                    let is_cent = !is_pretrim
+                                        && (item.document.margin_mm.is_none()
+                                            || item.document.margin_mm == Some(27.0));
                                     if ui.selectable_label(is_cent, "Centered").clicked() {
-                                        item.document.margin_mm = None;
+                                        item.document.margin_mm =
+                                            if item.document.max_length_mm.is_some() {
+                                                Some(27.0)
+                                            } else {
+                                                None
+                                            };
                                         item.dirty = true;
                                         if is_active {
                                             active_margin_changed = true;
                                         }
                                     }
 
-                                    let is_3 = item.document.margin_mm == Some(3.0);
+                                    let is_3 = (cur_margin - 3.0).abs() < 0.1;
                                     if ui.selectable_label(is_3, "✂ 3mm").clicked() {
                                         item.document.margin_mm = Some(3.0);
                                         item.dirty = true;
@@ -526,7 +561,7 @@ pub fn show_batch_panel(
                                         }
                                     }
 
-                                    let is_5 = item.document.margin_mm == Some(5.0);
+                                    let is_5 = (cur_margin - 5.0).abs() < 0.1;
                                     if ui.selectable_label(is_5, "✂ 5mm").clicked() {
                                         item.document.margin_mm = Some(5.0);
                                         item.dirty = true;
@@ -615,7 +650,7 @@ pub fn show_batch_panel(
                                     egui::RichText::new("NUMBER TO PRINT")
                                         .strong()
                                         .size(13.0)
-                                        .color(egui::Color32::from_rgb(20, 30, 45)),
+                                        .color(ui.visuals().strong_text_color()),
                                 );
 
                                 ui.add_space(6.0);
@@ -647,7 +682,7 @@ pub fn show_batch_panel(
                                     ui.label(
                                         egui::RichText::new("copies")
                                             .size(12.0)
-                                            .color(egui::Color32::from_rgb(60, 70, 85)),
+                                            .color(ui.visuals().weak_text_color()),
                                     );
                                 });
 
@@ -680,17 +715,27 @@ pub fn show_batch_panel(
                                     ui.label(
                                         egui::RichText::new("⚠️ Skipped (0 copies)")
                                             .size(11.0)
-                                            .color(egui::Color32::from_rgb(180, 100, 30)),
+                                            .color(widgets::accent_amber(ui)),
                                     );
                                 } else {
-                                    let subtotal_mm = mm_w * item.copies as f32;
+                                    let cur_margin = item.document.effective_margin_mm();
+                                    let per_copy_mm = if is_chain_mode {
+                                        mm_w + 4.0
+                                    } else if item.document.is_pretrim() {
+                                        mm_w + cur_margin * 2.0 + 24.5
+                                    } else {
+                                        mm_w + cur_margin * 2.0
+                                    };
+                                    let subtotal_mm = per_copy_mm * item.copies as f32;
                                     ui.label(
                                         egui::RichText::new(format!(
-                                            "✓ Will print {} copy(ies) (~{:.1} mm tape)",
-                                            item.copies, subtotal_mm
+                                            "Will print {} {} (~{:.1} mm tape)",
+                                            item.copies,
+                                            if item.copies == 1 { "copy" } else { "copies" },
+                                            subtotal_mm
                                         ))
                                         .size(11.0)
-                                        .color(egui::Color32::from_rgb(22, 101, 52)),
+                                        .color(widgets::accent_green(ui)),
                                     );
                                 }
                             });
@@ -710,6 +755,7 @@ pub fn show_batch_panel(
             if active_margin_changed && state.active_batch_index < state.batch_items.len() {
                 state.margin_mm =
                     state.batch_items[state.active_batch_index].document.margin_mm;
+                state.sync_cut_mode_from_margin();
                 state.mark_dirty();
             }
             if active_length_changed && state.active_batch_index < state.batch_items.len() {
@@ -717,7 +763,11 @@ pub fn show_batch_panel(
                     state.batch_items[state.active_batch_index].document.max_length_mm;
                 state.fit_largest_font =
                     state.batch_items[state.active_batch_index].document.fit_largest_font;
+                state.sync_cut_mode_from_margin();
                 state.mark_dirty();
+            }
+            if state.active_batch_index < state.batch_items.len() {
+                state.copies = state.batch_items[state.active_batch_index].copies;
             }
             if let Some(idx) = to_duplicate {
                 state.duplicate_batch_item(idx);
@@ -797,7 +847,7 @@ pub fn do_save_batch(state: &mut AppState) {
         }
     };
 
-    if let Some(path) = crate::widgets::save_layout_file() {
+    if let Some(path) = crate::widgets::save_batch_file() {
         let save_path = if path.extension().is_none() {
             path.with_extension("ptb")
         } else {
@@ -816,7 +866,7 @@ pub fn do_save_batch(state: &mut AppState) {
 
 /// Open a batch layout file or single layout file into the batch queue.
 pub fn do_open_batch(state: &mut AppState) {
-    let Some(path) = crate::widgets::pick_layout_file() else {
+    let Some(path) = crate::widgets::pick_batch_file() else {
         return;
     };
 
@@ -865,11 +915,13 @@ pub(crate) fn apply_loaded_batch(state: &mut AppState, batch: ptouch_render::doc
     }
     state.active_batch_index = 0;
     if !state.batch_items.is_empty() {
+        let copies = state.batch_items[0].copies;
         let doc = state.batch_items[0].document.clone();
         if !state.printer_target.is_bluetooth() {
             state.tape_width_mm = doc.tape_width_mm;
             state.update_tape_pixels();
         }
+        state.copies = copies;
         state.font_name = doc.font_name;
         state.font_margin = doc.font_margin;
         state.overall_flip_h = doc.flip_h;
@@ -883,6 +935,7 @@ pub(crate) fn apply_loaded_batch(state: &mut AppState, batch: ptouch_render::doc
         } else {
             Some(0)
         };
+        state.sync_cut_mode_from_margin();
         state.mark_dirty();
     }
 }

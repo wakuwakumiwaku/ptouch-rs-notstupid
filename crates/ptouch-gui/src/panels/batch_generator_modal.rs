@@ -62,11 +62,27 @@ pub fn show_generator_modal(ctx: &egui::Context, state: &mut AppState) {
 
     let mut should_close = false;
 
+    let style = ctx.style_of(ctx.theme());
+    let (fill, stroke) = if style.visuals.dark_mode {
+        (
+            egui::Color32::from_rgb(30, 34, 42),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(72, 82, 98)),
+        )
+    } else {
+        (
+            egui::Color32::WHITE,
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 208, 220)),
+        )
+    };
+    let frame = egui::Frame::window(&style).fill(fill).stroke(stroke);
+
     egui::Window::new(
         egui::RichText::new("⚡ Quick Generate Multiple Labels")
             .strong()
             .size(16.0),
     )
+    .frame(frame)
+    .fade_in(false)
     .open(&mut open)
     .collapsible(false)
     .resizable(false)
@@ -203,14 +219,13 @@ pub fn show_generator_modal(ctx: &egui::Context, state: &mut AppState) {
 
         // Action buttons
         ui.horizontal(|ui| {
-            if ui
-                .button(
-                    egui::RichText::new("⚡ Generate Labels")
-                        .strong()
-                        .color(egui::Color32::WHITE),
-                )
-                .clicked()
-            {
+            let gen_btn = egui::Button::new(
+                egui::RichText::new("⚡ Generate Labels")
+                    .strong()
+                    .color(egui::Color32::WHITE),
+            )
+            .fill(egui::Color32::from_rgb(37, 99, 235));
+            if ui.add(gen_btn).clicked() {
                 execute_generation(state, &gen_state);
                 should_close = true;
             }
@@ -304,19 +319,27 @@ fn execute_generation(state: &mut AppState, generator: &BatchGeneratorState) {
 
     state.active_batch_index = 0;
     if !state.batch_items.is_empty() {
+        let copies = state.batch_items[0].copies;
         let doc = state.batch_items[0].document.clone();
-        state.tape_width_mm = doc.tape_width_mm;
+        if !state.printer_target.is_bluetooth() {
+            state.tape_width_mm = doc.tape_width_mm;
+            state.update_tape_pixels();
+        }
+        state.copies = copies;
         state.font_name = doc.font_name;
         state.font_margin = doc.font_margin;
+        state.overall_flip_h = doc.flip_h;
+        state.overall_flip_v = doc.flip_v;
         state.margin_mm = doc.margin_mm;
         state.max_length_mm = doc.max_length_mm;
+        state.fit_largest_font = doc.fit_largest_font;
         state.elements = doc.elements;
         state.selected_element = if state.elements.is_empty() {
             None
         } else {
             Some(0)
         };
-        state.update_tape_pixels();
+        state.sync_cut_mode_from_margin();
         state.mark_dirty();
     }
 

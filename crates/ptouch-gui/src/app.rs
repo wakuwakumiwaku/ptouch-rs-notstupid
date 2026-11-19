@@ -308,7 +308,7 @@ impl eframe::App for PtouchApp {
         if let Ok(shot_path) = std::env::var("PTOUCH_SCREENSHOT") {
             self.screenshot_frame += 1;
             ctx.request_repaint();
-            if self.screenshot_frame == 4 {
+            if self.screenshot_frame == 15 {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             }
             let screenshot_img = ctx.input(|i| {

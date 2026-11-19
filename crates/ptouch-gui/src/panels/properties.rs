@@ -11,6 +11,7 @@ use ptouch_render::image_loader;
 use ptouch_render::text::TextAlign;
 
 use crate::state::{AppState, LabelElement};
+use crate::widgets;
 
 /// Render the right-side properties panel.
 pub fn show_properties(ui: &mut egui::Ui, state: &mut AppState) {
@@ -130,10 +131,7 @@ pub fn show_properties(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(8.0);
 
     if ui
-        .button(
-            egui::RichText::new("🗑 Delete Selected Element")
-                .color(egui::Color32::from_rgb(220, 38, 38)),
-        )
+        .button(egui::RichText::new("🗑 Delete Selected Element").color(widgets::accent_red(ui)))
         .on_hover_text("Remove this element from the label")
         .clicked()
     {
@@ -650,28 +648,31 @@ fn show_qr_properties(ui: &mut egui::Ui, props: QrProps, state: &mut AppState) -
     });
 
     ui.add_space(4.0);
-    if let Some(bmp) = bitmap.as_ref() {
+    let desired_h = target_height
+        .unwrap_or(state.tape_width_px)
+        .min(state.tape_width_px);
+    if let Ok(actual_bmp) = ptouch_render::qr::render_qr_code(content, desired_h) {
         let dpi = if state.printer_dpi > 0 {
             state.printer_dpi as f32
         } else {
             180.0
         };
-        let mm = (bmp.width() as f32 / dpi) * 25.4;
+        let mm = (actual_bmp.width() as f32 / dpi) * 25.4;
         ui.label(
             egui::RichText::new(format!(
                 "Size: {} × {} px (~{:.1} mm)",
-                bmp.width(),
-                bmp.height(),
+                actual_bmp.width(),
+                actual_bmp.height(),
                 mm
             ))
             .small()
-            .color(egui::Color32::from_rgb(40, 100, 160)),
+            .color(widgets::accent_blue(ui)),
         );
     } else {
         ui.label(
             egui::RichText::new("⚠️ Invalid or empty QR content")
                 .small()
-                .color(egui::Color32::from_rgb(200, 50, 50)),
+                .color(widgets::accent_red(ui)),
         );
     }
 

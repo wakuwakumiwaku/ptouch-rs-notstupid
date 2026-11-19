@@ -84,18 +84,43 @@ pub fn load_image(path: &Path, options: &ImageLoadOptions) -> Result<LabelBitmap
 /// Load an image from a reader and convert to a 1-bit [`LabelBitmap`].
 ///
 /// The reader contents are buffered into memory for format detection and
-/// decoding.
+/// decoding. Supports both raster formats (via `image`) and SVG/SVGZ (via `resvg`).
 pub fn load_image_from_reader<R: Read>(
     mut reader: R,
     options: &ImageLoadOptions,
 ) -> Result<LabelBitmap> {
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf)?;
-    let cursor = std::io::Cursor::new(buf);
-    let img = image::ImageReader::new(cursor)
-        .with_guessed_format()?
-        .decode()?;
+    let img = if looks_like_svg(&buf) {
+        render_svg_data(&buf, options.target_height)?
+    } else {
+        let cursor = std::io::Cursor::new(buf);
+        image::ImageReader::new(cursor)
+            .with_guessed_format()?
+            .decode()?
+    };
     Ok(convert_to_bitmap(img, options))
+}
+
+/// Heuristic check for plain SVG XML or gzip-compressed SVGZ data.
+fn looks_like_svg(data: &[u8]) -> bool {
+    if data.starts_with(&[0x1f, 0x8b]) {
+        return true;
+    }
+    let trimmed = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
+    let sample = &trimmed[..trimmed.len().min(4096)];
+    let prefix = match std::str::from_utf8(sample) {
+        Ok(s) => s,
+        Err(e) if e.valid_up_to() > 0 => {
+            std::str::from_utf8(&sample[..e.valid_up_to()]).unwrap_or("")
+        }
+        Err(_) => return false,
+    };
+    let start = prefix.trim_start();
+    if !start.starts_with('<') {
+        return false;
+    }
+    start.to_ascii_lowercase().contains("<svg")
 }
 
 /// Load a PNG image from a file path (backward-compatible wrapper).
@@ -608,6 +633,23 @@ mod tests {
         // Center should be black (the rectangle).
         assert!(bmp.get_pixel(25, 25));
         // Corner should be white (outside the rectangle).
+        assert!(!bmp.get_pixel(0, 0));
+    }
+
+    #[test]
+    fn test_load_svg_from_reader() {
+        let svg = br#"<?xml version="1.0" encoding="UTF-8"?>
+            <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+                <rect x="25" y="25" width="50" height="50" fill="black"/>
+            </svg>"#;
+        let options = ImageLoadOptions {
+            target_height: Some(50),
+            ..ImageLoadOptions::default()
+        };
+        let bmp = load_image_from_reader(std::io::Cursor::new(svg.as_slice()), &options).unwrap();
+        assert_eq!(bmp.height(), 50);
+        assert_eq!(bmp.width(), 50);
+        assert!(bmp.get_pixel(25, 25));
         assert!(!bmp.get_pixel(0, 0));
     }
 

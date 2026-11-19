@@ -150,6 +150,7 @@ impl PtouchDevice {
     pub fn open_first() -> Result<Self> {
         let context = Context::new()?;
         let devices = context.devices()?;
+        let mut skipped_err: Option<PtouchError> = None;
 
         for usb_dev in devices.iter() {
             let desc = match usb_dev.device_descriptor() {
@@ -162,9 +163,15 @@ impl PtouchDevice {
             }
 
             if let Some(dev_info) = device::find_device(desc.vendor_id(), desc.product_id()) {
-                if dev_info.flags.contains(DeviceFlags::PLITE)
-                    || dev_info.flags.contains(DeviceFlags::UNSUP_RASTER)
-                {
+                if dev_info.flags.contains(DeviceFlags::PLITE) {
+                    skipped_err
+                        .get_or_insert_with(|| PtouchError::PLiteMode(dev_info.name.to_string()));
+                    continue;
+                }
+                if dev_info.flags.contains(DeviceFlags::UNSUP_RASTER) {
+                    skipped_err.get_or_insert_with(|| {
+                        PtouchError::UnsupportedRaster(dev_info.name.to_string())
+                    });
                     continue;
                 }
 
@@ -172,7 +179,7 @@ impl PtouchDevice {
             }
         }
 
-        Err(PtouchError::DeviceNotFound)
+        Err(skipped_err.unwrap_or(PtouchError::DeviceNotFound))
     }
 
     /// Get a reference to the USB device info.

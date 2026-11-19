@@ -3,7 +3,8 @@
 
 //! Bottom status bar panel.
 
-use crate::state::AppState;
+use crate::state::{AppState, format_tape_width_mm};
+use crate::widgets;
 
 /// Render the bottom status bar.
 pub fn show_status_bar(ui: &mut egui::Ui, state: &AppState) {
@@ -15,14 +16,15 @@ pub fn show_status_bar(ui: &mut egui::Ui, state: &AppState) {
         ui.separator();
 
         // Tape info & cartridge remaining
+        let tape_label = format_tape_width_mm(state.tape_width_mm);
         if let Some(total_m) = state.cartridge_total_length_m {
             let remaining = (total_m - state.tape_printed_meters).max(0.0);
             ui.label(format!(
-                "Tape: {} mm | Cartridge: {:.2}m rem / {:.1}m",
-                state.tape_width_mm, remaining, total_m
+                "Tape: {} | Cartridge: {:.2}m rem / {:.1}m",
+                tape_label, remaining, total_m
             ));
         } else {
-            ui.label(format!("Tape: {} mm", state.tape_width_mm));
+            ui.label(format!("Tape: {}", tape_label));
         }
 
         ui.separator();
@@ -47,13 +49,13 @@ pub fn show_status_bar(ui: &mut egui::Ui, state: &AppState) {
                 ui.spinner();
                 ui.label(
                     egui::RichText::new(&state.status_message)
-                        .color(egui::Color32::from_rgb(30, 64, 175))
+                        .color(widgets::accent_blue(ui))
                         .strong(),
                 );
             } else if state.status_message.to_lowercase().contains("error") {
                 ui.label(
                     egui::RichText::new(&state.status_message)
-                        .color(egui::Color32::from_rgb(220, 38, 38))
+                        .color(widgets::accent_red(ui))
                         .strong(),
                 );
             } else {

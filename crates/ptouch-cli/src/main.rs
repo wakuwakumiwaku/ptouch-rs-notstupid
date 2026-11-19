@@ -70,8 +70,8 @@ struct PrintArgs {
     text: Vec<String>,
 
     /// Print a saved layout file (.ptl). The layout is authoritative; ad-hoc
-    /// content flags (text, --image, --font, --size, --align, --margin, --cut,
-    /// --pad) are ignored with a warning.
+    /// content flags (text, --image, --qr, --font, --size, --align, --margin,
+    /// --cut, --pad, --max-length) are ignored with a warning.
     #[arg(short = 'l', long, value_name = "FILE")]
     layout: Option<String>,
 
@@ -80,7 +80,7 @@ struct PrintArgs {
     set: Vec<String>,
 
     /// Print one label per row of a CSV file ('-' for stdin); the header row
-    /// names the placeholders. With --output, include '{n}' for the row number.
+    /// names the placeholders. With --output, include a row-number token.
     #[arg(long, value_name = "FILE")]
     csv: Option<String>,
 
@@ -104,7 +104,7 @@ struct PrintArgs {
     #[arg(long, value_enum, default_value = "auto")]
     binarize: BinarizeArg,
 
-    /// Export to PNG file instead of printing
+    /// Export to an image file (PNG, JPEG, BMP, etc.) instead of printing
     #[arg(short = 'o', long)]
     output: Option<String>,
 
@@ -644,12 +644,29 @@ fn execute_info(args: &InfoArgs) -> Result<(), Box<dyn std::error::Error>> {
 // Subcommand: print
 // ---------------------------------------------------------------------------
 
+/// Validate numeric CLI options before opening devices or writing output.
+fn validate_numeric_print_options(args: &PrintArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(w) = args.tape_width
+        && (w == 0 || w > u32::from(u16::MAX))
+    {
+        return Err(format!("--tape-width must be between 1 and {}", u16::MAX).into());
+    }
+    if let Some(max_len) = args.max_length
+        && (!max_len.is_finite() || max_len <= 0.0)
+    {
+        return Err("--max-length must be a finite number greater than 0".into());
+    }
+    if let Some(size) = args.size
+        && (!size.is_finite() || size <= 0.0)
+    {
+        return Err("--size must be a finite number greater than 0".into());
+    }
+    Ok(())
+}
+
 /// Build a label from a layout file or ad-hoc text/images, then print or save.
 fn execute_print(args: &PrintArgs, ignored: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    if args.tape_width == Some(0) {
-        eprintln!("Error: --tape-width must be greater than 0");
-        process::exit(1);
-    }
+    validate_numeric_print_options(args)?;
 
     // Layout-only modifiers make no sense without a layout.
     if args.layout.is_none()
@@ -706,8 +723,9 @@ fn execute_print(args: &PrintArgs, ignored: &[String]) -> Result<(), Box<dyn std
 
     // Whole-label mirroring applies once, after the label is composed.
     let dpi = device.as_ref().map_or(180, |d| d.dpi());
+    let auto_precut = !args.chain && args.max_length.is_some();
     let bitmap = build_label(args, print_width, dpi)?.mirrored(args.flip_h, args.flip_v);
-    emit_label(&bitmap, args, max_px, dpi, device.as_mut())?;
+    emit_label(&bitmap, args, max_px, dpi, auto_precut, device.as_mut())?;
 
     if let Some(dev) = device {
         dev.close()?;
@@ -763,9 +781,11 @@ fn print_layout(args: &PrintArgs, layout_path: &str) -> Result<(), Box<dyn std::
     doc.apply_values(&values);
 
     let (print_width, max_px, mut device) = resolve_layout_target(args, &doc)?;
-    let bitmap = render_layout(&doc, print_width)?;
     let dpi = device.as_ref().map_or(doc.dpi, |d| d.dpi());
-    emit_label(&bitmap, args, max_px, dpi, device.as_mut())?;
+    let mut renderer = TextRenderer::new();
+    let bitmap = render_layout(&doc, print_width, dpi, &mut renderer)?;
+    let auto_precut = !args.chain && doc.is_pretrim();
+    emit_label(&bitmap, args, max_px, dpi, auto_precut, device.as_mut())?;
 
     if let Some(dev) = device {
         dev.close()?;
@@ -810,6 +830,9 @@ fn print_layout_batch(
     validate_vars(&doc.placeholders(), &provided, args.allow_missing)?;
 
     let (print_width, max_px, mut device) = resolve_layout_target(args, &doc)?;
+    let dpi = device.as_ref().map_or(doc.dpi, |d| d.dpi());
+    let auto_precut = !args.chain && doc.is_pretrim();
+    let mut renderer = TextRenderer::new();
 
     let mut count = 0usize;
     for record in rdr.records() {
@@ -819,7 +842,7 @@ fn print_layout_batch(
 
         let mut row_doc = doc.clone();
         row_doc.apply_values(&values);
-        let bitmap = render_layout(&row_doc, print_width)?;
+        let bitmap = render_layout(&row_doc, print_width, dpi, &mut renderer)?;
 
         count += 1;
         if let Some(output) = &args.output {
@@ -827,7 +850,7 @@ fn print_layout_batch(
             bitmap.save(Path::new(&path))?;
             println!("Saved row {} to '{}'", count, path);
         } else if let Some(dev) = device.as_mut() {
-            print_to_device(dev, &bitmap, max_px, args)?;
+            print_to_device(dev, &bitmap, max_px, args, auto_precut)?;
         } else {
             eprintln!("Error: no output destination (use --output or connect a printer)");
             process::exit(1);
@@ -863,9 +886,10 @@ fn build_row_values(
 fn render_layout(
     doc: &LabelDocument,
     print_width: u32,
+    dpi: u16,
+    renderer: &mut TextRenderer,
 ) -> Result<LabelBitmap, Box<dyn std::error::Error>> {
-    let mut renderer = TextRenderer::new();
-    let max_width_px = doc.max_content_width_px(doc.dpi);
+    let max_width_px = doc.max_content_width_px(dpi);
     let bitmap = document::render_elements_with_options(
         &doc.elements,
         print_width,
@@ -873,7 +897,7 @@ fn render_layout(
         doc.font_margin,
         max_width_px,
         doc.fit_largest_font,
-        &mut renderer,
+        renderer,
     )?
     .ok_or_else(|| PtouchError::SendFailed("layout produced no output".to_string()))?;
     // The layout's saved whole-label flip is applied after composition.
@@ -936,6 +960,7 @@ fn emit_label(
     args: &PrintArgs,
     max_px: u16,
     dpi: u16,
+    auto_precut: bool,
     device: Option<&mut CliDevice>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref output_path) = args.output {
@@ -949,7 +974,7 @@ fn emit_label(
             tape_mm
         );
     } else if let Some(dev) = device {
-        print_to_device(dev, bitmap, max_px, args)?;
+        print_to_device(dev, bitmap, max_px, args, auto_precut)?;
     } else {
         eprintln!("Error: no output destination (use --output or connect a printer)");
         process::exit(1);
@@ -1143,29 +1168,32 @@ fn print_to_device(
     bitmap: &LabelBitmap,
     max_px: u16,
     args: &PrintArgs,
+    auto_precut: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let raster_lines = raster::bitmap_to_raster_lines(bitmap, max_px);
+    let effective_precut = !dev.is_bluetooth() && (args.precut || auto_precut);
 
     let total_copies = args.copies.max(1);
     for copy_idx in 0..total_copies {
         let is_last = copy_idx == total_copies - 1;
         // Chain intermediate copies (no cut between copies).
         // Last copy: chain only if user requested --chain.
-        // Chain intermediate copies; last copy follows user's --chain flag
         let chain_print = !dev.is_bluetooth() && (args.chain || !is_last);
+        let precut_this_copy = effective_precut && copy_idx == 0;
 
         debug!(
-            "Printing copy {}/{} ({} raster lines, chain={})",
+            "Printing copy {}/{} ({} raster lines, chain={}, precut={})",
             copy_idx + 1,
             total_copies,
             raster_lines.len(),
-            chain_print
+            chain_print,
+            precut_this_copy
         );
 
         dev.print_raster(
             &raster_lines,
             chain_print,
-            args.precut,
+            precut_this_copy,
             args.quality.to_print_quality(),
         )?;
     }
@@ -1333,5 +1361,37 @@ mod tests {
     #[test]
     fn test_output_n_token_replacement() {
         assert_eq!("label-{n}.png".replace("{n}", "3"), "label-3.png");
+    }
+
+    #[test]
+    fn test_validate_numeric_print_options_rejects_invalid_values() {
+        for bad_args in [
+            vec!["ptouch", "print", "-w", "0", "-o", "out.png", "Hi"],
+            vec!["ptouch", "print", "-w", "70000", "-o", "out.png", "Hi"],
+            vec![
+                "ptouch", "print", "-L", "0", "-w", "76", "-o", "out.png", "Hi",
+            ],
+            vec![
+                "ptouch", "print", "-L=-10", "-w", "76", "-o", "out.png", "Hi",
+            ],
+            vec![
+                "ptouch", "print", "-L", "NaN", "-w", "76", "-o", "out.png", "Hi",
+            ],
+            vec![
+                "ptouch", "print", "-s", "0", "-w", "76", "-o", "out.png", "Hi",
+            ],
+            vec![
+                "ptouch", "print", "-s=-5", "-w", "76", "-o", "out.png", "Hi",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(bad_args.clone()).unwrap();
+            let Commands::Print(print) = cli.command else {
+                panic!("expected print command");
+            };
+            assert!(
+                validate_numeric_print_options(&print).is_err(),
+                "expected validation failure for {bad_args:?}"
+            );
+        }
     }
 }

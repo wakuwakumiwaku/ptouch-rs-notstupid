@@ -11,7 +11,8 @@ use ptouch_render::document::LabelDocument;
 use ptouch_render::raster;
 use ptouch_render::text::TextAlign;
 
-use crate::state::{AppState, LabelElement, PrinterCommand, ViewMode};
+use crate::state::{AppState, LabelElement, PrinterCommand, ViewMode, format_tape_width_mm};
+use crate::widgets;
 
 /// Render the top toolbar.
 pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
@@ -26,9 +27,9 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         };
         let view_btn = egui::Button::new(egui::RichText::new(view_label).strong().color(
             if state.view_mode == ViewMode::Batch {
-                egui::Color32::from_rgb(30, 64, 175)
+                widgets::accent_blue(ui)
             } else {
-                egui::Color32::from_rgb(20, 110, 40)
+                widgets::accent_green(ui)
             },
         ));
         if ui.add(view_btn).clicked() {
@@ -229,7 +230,7 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::RichText::new(format!("🖨 Print All ({total_prints})"))
                     .strong()
                     .color(if can_print_batch {
-                        egui::Color32::from_rgb(22, 101, 52)
+                        widgets::accent_green(ui)
                     } else {
                         egui::Color32::GRAY
                     }),
@@ -257,7 +258,7 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             && ui
                 .button(
                     egui::RichText::new("⏹ Cancel")
-                        .color(egui::Color32::from_rgb(220, 38, 38))
+                        .color(widgets::accent_red(ui))
                         .strong(),
                 )
                 .on_hover_text("Abort the active print operation immediately")
@@ -289,11 +290,12 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             state.status_message = "Feeding & cutting...".to_string();
         }
 
+        let tape_label = format_tape_width_mm(state.tape_width_mm);
         let tape_btn_label = if let Some(total_m) = state.cartridge_total_length_m {
             let rem = (total_m - state.tape_printed_meters).max(0.0);
-            format!("🏷 Tape: {} mm ({:.1}m rem)", state.tape_width_mm, rem)
+            format!("🏷 Tape: {} ({:.1}m rem)", tape_label, rem)
         } else {
-            format!("🏷 Tape: {} mm", state.tape_width_mm)
+            format!("🏷 Tape: {}", tape_label)
         };
         if ui.button(tape_btn_label).clicked() {
             state.show_setup_modal = true;
@@ -541,12 +543,9 @@ pub(crate) fn apply_layout(state: &mut AppState, mut document: LabelDocument) {
     } else {
         Some(0)
     };
+    state.sync_cut_mode_from_margin();
+    let title = state.derive_label_title();
     if state.batch_items.is_empty() {
-        let title = state
-            .elements
-            .first()
-            .map(|e| e.display_name())
-            .unwrap_or_else(|| "Label 1".into());
         state.batch_items.push(crate::state::BatchItem {
             id: state.next_batch_item_id,
             title,
@@ -558,13 +557,10 @@ pub(crate) fn apply_layout(state: &mut AppState, mut document: LabelDocument) {
         });
         state.next_batch_item_id += 1;
         state.active_batch_index = 0;
+        state.copies = 1;
     } else if state.active_batch_index < state.batch_items.len() {
         state.batch_items[state.active_batch_index].document = doc_clone;
-        state.batch_items[state.active_batch_index].title = state
-            .elements
-            .first()
-            .map(|e| e.display_name())
-            .unwrap_or_else(|| "Label".into());
+        state.batch_items[state.active_batch_index].title = title;
         state.batch_items[state.active_batch_index].dirty = true;
     }
     state.mark_dirty();

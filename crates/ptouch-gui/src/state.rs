@@ -12,6 +12,15 @@ use ptouch_render::document::{DOCUMENT_VERSION, LabelDocument};
 
 pub use ptouch_render::document::LabelElement;
 
+/// Format a Brother nominal tape width for display (4 mm in protocol tables is 3.5 mm tape).
+pub fn format_tape_width_mm(width_mm: u8) -> String {
+    if width_mm == 4 {
+        "3.5 mm".to_string()
+    } else {
+        format!("{width_mm} mm")
+    }
+}
+
 /// High-level view mode for the GUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
@@ -421,58 +430,67 @@ impl AppState {
         self.batch_items.iter().map(|item| item.copies).sum()
     }
 
+    /// Keep `cut_mode` (unless in ChainPrint) and `small_margin_mm` consistent with `margin_mm`.
+    pub fn sync_cut_mode_from_margin(&mut self) {
+        if self.cut_mode == CutMarginMode::ChainPrint {
+            return;
+        }
+        if self.is_pretrim() {
+            self.cut_mode = CutMarginMode::PretrimCut;
+            self.small_margin_mm = self.effective_margin_mm();
+        } else {
+            self.cut_mode = CutMarginMode::CenteredFull;
+        }
+    }
+
     /// Ensure `batch_items` has at least one item initialized.
     pub fn ensure_batch_initialized(&mut self) {
         if self.batch_items.is_empty() {
-            let test_items: [(&str, u32, &str, Option<f32>); 4] = [
-                ("Ä Ö Ü ä ö ü ß • € 24,50", 2, "DINish", None),
-                ("ACHTUNG!\nHochspannung 230V", 1, "Frutiger", Some(3.0)),
-                ("SKIP ME (0 COPIES)", 0, "Inter", None),
-                ("é è ê ç ñ ¿ ¡ ™ ® ©", 1, "Inter", Some(5.0)),
-            ];
-
-            for (text, copies, font, margin) in test_items {
-                let doc = ptouch_render::document::LabelDocument {
-                    version: ptouch_render::document::DOCUMENT_VERSION,
-                    tape_width_mm: self.tape_width_mm,
-                    dpi: self.printer_dpi,
-                    font_name: font.to_string(),
-                    font_margin: 0,
-                    flip_h: false,
-                    flip_v: false,
-                    margin_mm: margin,
-                    max_length_mm: None,
-                    fit_largest_font: true,
-                    elements: vec![LabelElement::Text {
-                        content: text.to_string(),
+            let doc = ptouch_render::document::LabelDocument {
+                version: ptouch_render::document::DOCUMENT_VERSION,
+                tape_width_mm: self.tape_width_mm,
+                dpi: self.printer_dpi,
+                font_name: self.font_name.clone(),
+                font_margin: self.font_margin,
+                flip_h: self.overall_flip_h,
+                flip_v: self.overall_flip_v,
+                margin_mm: self.margin_mm,
+                max_length_mm: self.max_length_mm,
+                fit_largest_font: self.fit_largest_font,
+                elements: if self.elements.is_empty() {
+                    vec![LabelElement::Text {
+                        content: "Label 1".to_string(),
                         font_size: None,
                         align: ptouch_render::text::TextAlign::Center,
                         rotation: 0.0,
                         flip_h: false,
                         flip_v: false,
-                    }],
-                };
-                let title = text.lines().next().unwrap_or("Label").to_string();
-                self.batch_items.push(BatchItem {
-                    id: self.next_batch_item_id,
-                    title,
-                    copies,
-                    document: doc,
-                    preview_bitmap: None,
-                    preview_texture: None,
-                    dirty: true,
-                });
-                self.next_batch_item_id += 1;
-            }
+                    }]
+                } else {
+                    self.elements.clone()
+                },
+            };
+            self.elements = doc.elements.clone();
+            let title = self.derive_label_title();
+            self.batch_items.push(BatchItem {
+                id: self.next_batch_item_id,
+                title,
+                copies: self.copies.max(1),
+                document: doc,
+                preview_bitmap: None,
+                preview_texture: None,
+                dirty: true,
+            });
+            self.next_batch_item_id += 1;
 
             self.active_batch_index = 0;
-            self.elements = self.batch_items[0].document.elements.clone();
-            self.font_name = self.batch_items[0].document.font_name.clone();
-            self.copies = self.batch_items[0].copies.max(1);
-            self.margin_mm = self.batch_items[0].document.margin_mm;
-            self.max_length_mm = self.batch_items[0].document.max_length_mm;
-            self.fit_largest_font = self.batch_items[0].document.fit_largest_font;
-            self.selected_element = Some(0);
+            self.copies = self.batch_items[0].copies;
+            self.selected_element = if self.elements.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+            self.sync_cut_mode_from_margin();
             self.mark_dirty();
         }
     }
@@ -507,11 +525,13 @@ impl AppState {
             self.sync_active_to_batch();
             self.active_batch_index = new_idx;
         }
+        let copies = self.batch_items[new_idx].copies;
         let doc = self.batch_items[new_idx].document.clone();
         if !self.printer_target.is_bluetooth() {
             self.tape_width_mm = doc.tape_width_mm;
             self.update_tape_pixels();
         }
+        self.copies = copies;
         self.font_name = doc.font_name;
         self.font_margin = doc.font_margin;
         self.overall_flip_h = doc.flip_h;
@@ -525,6 +545,7 @@ impl AppState {
         } else {
             Some(0)
         };
+        self.sync_cut_mode_from_margin();
         self.mark_dirty();
     }
 
@@ -598,8 +619,13 @@ impl AppState {
             self.active_batch_index
         };
         self.active_batch_index = new_active;
+        let copies = self.batch_items[new_active].copies;
         let doc = self.batch_items[new_active].document.clone();
-        self.tape_width_mm = doc.tape_width_mm;
+        if !self.printer_target.is_bluetooth() {
+            self.tape_width_mm = doc.tape_width_mm;
+            self.update_tape_pixels();
+        }
+        self.copies = copies;
         self.font_name = doc.font_name;
         self.font_margin = doc.font_margin;
         self.overall_flip_h = doc.flip_h;
@@ -613,7 +639,7 @@ impl AppState {
         } else {
             Some(0)
         };
-        self.update_tape_pixels();
+        self.sync_cut_mode_from_margin();
         self.mark_dirty();
     }
 
@@ -640,8 +666,9 @@ impl AppState {
             if let LabelElement::Text { content, .. } = el {
                 let first_line = content.lines().next().unwrap_or("").trim();
                 if !first_line.is_empty() {
-                    return if first_line.len() > 24 {
-                        format!("{}...", &first_line[..24])
+                    return if first_line.chars().count() > 24 {
+                        let truncated: String = first_line.chars().take(24).collect();
+                        format!("{truncated}...")
                     } else {
                         first_line.to_string()
                     };
@@ -649,5 +676,55 @@ impl AppState {
             }
         }
         format!("Label {}", self.active_batch_index + 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ptouch_render::text::TextAlign;
+
+    #[test]
+    fn derive_label_title_handles_multibyte_utf8_without_panicking() {
+        let mut state = AppState::default();
+        // Byte 24 lands inside '•' (3 bytes); char-based slicing must not panic.
+        let text = "X Ä Ö Ü ä ö ü ß • € 24,50 — extra text";
+        state.elements = vec![LabelElement::Text {
+            content: text.to_string(),
+            font_size: None,
+            align: TextAlign::Center,
+            rotation: 0.0,
+            flip_h: false,
+            flip_v: false,
+        }];
+        let title = state.derive_label_title();
+        assert!(title.ends_with("..."));
+        assert_eq!(title.chars().count(), 27);
+    }
+
+    #[test]
+    fn format_tape_width_maps_protocol_4mm_to_3_5mm() {
+        assert_eq!(format_tape_width_mm(4), "3.5 mm");
+        assert_eq!(format_tape_width_mm(12), "12 mm");
+        assert_eq!(format_tape_width_mm(24), "24 mm");
+    }
+
+    #[test]
+    fn switch_active_batch_syncs_copies_and_cut_mode() {
+        let mut state = AppState::default();
+        state.ensure_batch_initialized();
+        state.add_blank_batch_item();
+        state.margin_mm = Some(3.0);
+        state.sync_cut_mode_from_margin();
+        state.batch_items[1].copies = 4;
+        state.copies = 4;
+
+        state.switch_active_batch(0);
+        assert_eq!(state.copies, 1);
+        assert_eq!(state.cut_mode, CutMarginMode::CenteredFull);
+
+        state.switch_active_batch(1);
+        assert_eq!(state.copies, 4);
+        assert_eq!(state.cut_mode, CutMarginMode::PretrimCut);
     }
 }

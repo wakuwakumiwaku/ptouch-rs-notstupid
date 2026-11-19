@@ -8,7 +8,8 @@ use log::info;
 use ptouch_core::protocol::PrintQuality;
 use ptouch_core::tape;
 
-use crate::state::{AppState, CutMarginMode, PrinterCommand};
+use crate::state::{AppState, CutMarginMode, PrinterCommand, format_tape_width_mm};
+use crate::widgets;
 
 /// Render the left sidebar.
 pub fn show_sidebar(ui: &mut egui::Ui, state: &mut AppState) {
@@ -81,14 +82,18 @@ fn show_tape_section(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(4.0);
 
     let tapes = tape::supported_tapes(state.printer_dpi);
-    let current_label = format!("{} mm ({} px)", state.tape_width_mm, state.tape_width_px);
+    let current_label = format!(
+        "{} ({} px)",
+        format_tape_width_mm(state.tape_width_mm),
+        state.tape_width_px
+    );
 
     ui.add_enabled_ui(!state.printer_target.is_bluetooth(), |ui| {
         egui::ComboBox::from_label("Width")
             .selected_text(&current_label)
             .show_ui(ui, |ui| {
                 for t in tapes {
-                    let label = format!("{} mm ({} px)", t.width_mm, t.pixels);
+                    let label = format!("{} ({} px)", format_tape_width_mm(t.width_mm), t.pixels);
                     if ui
                         .selectable_value(&mut state.tape_width_mm, t.width_mm, &label)
                         .clicked()
@@ -206,7 +211,7 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
                 mode_desc
             ))
             .small()
-            .color(egui::Color32::from_rgb(96, 165, 250)),
+            .color(widgets::accent_blue(ui)),
         );
     }
 
@@ -304,7 +309,7 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
                         cur_margin
                     ))
                     .small()
-                    .color(egui::Color32::from_rgb(194, 65, 12)),
+                    .color(widgets::accent_amber(ui)),
                 );
             } else {
                 ui.label(
@@ -313,22 +318,22 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
                         cur_margin
                     ))
                     .small()
-                    .color(egui::Color32::from_rgb(22, 101, 52)),
+                    .color(widgets::accent_green(ui)),
                 );
             }
         } else {
             ui.add_space(2.0);
             ui.label(
-                egui::RichText::new("ℹ Continuous printing without cuts. Click 'Feed & Cut' in the toolbar when finished.")
+                egui::RichText::new("Continuous printing without cuts. Click 'Feed & Cut' in the toolbar when finished.")
                     .small()
-                    .color(egui::Color32::from_rgb(0, 140, 70)),
+                    .color(widgets::accent_green(ui)),
             );
         }
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Copies:");
-            let resp = ui.add(egui::DragValue::new(&mut state.copies).range(1..=99));
+            let resp = ui.add(egui::DragValue::new(&mut state.copies).range(0..=999));
             if resp.changed() && state.active_batch_index < state.batch_items.len() {
                 state.batch_items[state.active_batch_index].copies = state.copies;
             }

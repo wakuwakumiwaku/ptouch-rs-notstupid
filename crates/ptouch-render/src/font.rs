@@ -31,7 +31,10 @@ pub fn find_font(name: &str) -> Option<String> {
     find_font_in_db(font_system.db(), name)
 }
 
-fn find_font_in_db(db: &cosmic_text::fontdb::Database, name: &str) -> Option<String> {
+/// Find a font by name within an existing font database.
+///
+/// The search is case-insensitive and prefers exact family names before partial matches.
+pub fn find_font_in_db(db: &cosmic_text::fontdb::Database, name: &str) -> Option<String> {
     let name_lower = name.to_lowercase();
 
     // Map common aliases/short names
